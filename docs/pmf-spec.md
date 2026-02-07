@@ -52,13 +52,13 @@ PMF 是保留思源块 ID 的 Markdown 格式，用于精确文档编辑。
 
 改变块标记的顺序即可。
 
-### 危险：插入新块
+### 插入新块（可用）
 
-> **已知 BUG：apply-patch 插入新块时，执行阶段会因 temp ID 无法解析而报 "invalid ID argument"。**
->
-> **更严重的是：如果同时有删除和插入操作，删除会先执行成功，但插入失败 → 导致文档内容丢失且无法回滚。**
+apply-patch 支持插入新块。建议使用唯一临时 ID（如 `tmp-001`）并确保同一 PMF 内不重复。
 
-**绝对不要在 apply-patch 中同时删除旧块和插入新块。**
+注意：
+- PMF 必须完整（缺失块会被视为删除）
+- `partial=true` 的分页/章节 PMF 会被拒绝
 
 ---
 
@@ -132,10 +132,10 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "## 详情"
 
 | 错误 | 原因 | 处理方式 |
 |------|------|---------|
-| `invalid ID argument` | apply-patch 插入新块的 temp ID 无法解析 | 不要用 apply-patch 插入新块，改用 append-block |
+| `invalid ID argument` | 块 ID 不存在或格式错误（含手工编辑 PMF 写错） | 重新导出完整 PMF，修正 block ID 后再提交 |
 | `PMF 文档ID不匹配` | PMF 中的 doc id 与目标文档不一致 | 检查文档 ID |
 | `重复 block id` | PMF 中有重复的块 ID | 确保每个块 ID 唯一 |
-| 文档被清空 | apply-patch 删除成功但插入失败 | 用 append-block 重建内容 |
+| 文档被清空 | 提交了不完整 PMF，缺失块被当作删除 | 仅基于 `open-doc ... patchable --full` 导出的完整 PMF 编辑 |
 | 写入围栏报错 | 没有先 open-doc | 先执行 `open-doc "docID" readable` |
 
 ---
@@ -144,9 +144,9 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "## 详情"
 
 | 场景 | 方法 | 安全性 |
 |------|------|--------|
-| 修改已有块内容 | apply-patch（仅 update） | 安全 |
+| 修改已有块内容 | apply-patch（update） | 安全 |
 | 重排已有块 | apply-patch（仅 reorder） | 安全 |
-| 删除块 | apply-patch（仅 delete） | 安全 |
+| 删除块 | apply-patch（delete） | 安全 |
 | 追加新内容 | append-block | 安全 |
 | 替换章节 | replace-section | 安全 |
-| 删除 + 插入新块 | **不要用 apply-patch**，用 replace-section 或 append-block | apply-patch 会丢数据 |
+| 删除 + 插入新块 | apply-patch（delete + insert）或 replace-section/append-block | 需要完整 PMF，避免 partial |

@@ -39,7 +39,7 @@ const CLI_USAGE_TEXT = `
   blocks <文档ID> [类型]     - 查询文档子块
   tag <标签名>              - 搜索包含标签的笔记
   backlinks <块ID>          - 查询块的反向链接
-  tasks [状态] [天数]        - 查询任务列表 (状态: [ ]未完成, [x]已完成, [-]进行中)
+  tasks [状态] [天数]        - 查询任务列表 (状态: "[ ]"未完成, "[x]"已完成, "[-]"进行中)
   daily <开始日期> <结束日期> - 查询Daily Note (日期格式: YYYYMMDD)
   attr <属性名> [属性值]     - 查询包含属性的块
   bookmarks [书签名]         - 查询书签
@@ -82,9 +82,14 @@ function printCliUsage() {
     console.log(CLI_USAGE_TEXT);
 }
 
+function cliError(message) {
+    console.error(message);
+    process.exitCode = 1;
+}
+
 function cliRequireArg(args, index, message) {
     if (!args[index]) {
-        console.error(message);
+        cliError(message);
         return '';
     }
 
@@ -194,12 +199,12 @@ function createCliHandlers(deps) {
             }
             const docId = positional[0];
             if (!docId) {
-                console.error('请提供文档ID');
+                cliError('请提供文档ID');
                 return;
             }
             const view = (positional[1] || 'readable').toLowerCase();
             if (view !== 'readable' && view !== 'patchable') {
-                console.error('视图参数仅支持 readable 或 patchable');
+                cliError('视图参数仅支持 readable 或 patchable');
                 return;
             }
 
@@ -212,7 +217,7 @@ function createCliHandlers(deps) {
             if (!headingBlockId) return;
             const view = (args[2] || 'readable').toLowerCase();
             if (view !== 'readable' && view !== 'patchable') {
-                console.error('视图参数仅支持 readable 或 patchable');
+                cliError('视图参数仅支持 readable 或 patchable');
                 return;
             }
             const result = await openSection(headingBlockId, view);
@@ -303,12 +308,12 @@ function createCliHandlers(deps) {
             const fromRaw = positional.slice(1).join(' ').trim();
 
             if (!toID) {
-                console.error('请提供目标ID（父文档ID或笔记本ID）');
+                cliError('请提供目标ID（父文档ID或笔记本ID）');
                 return;
             }
 
             if (!fromRaw) {
-                console.error('请提供来源文档ID列表（逗号或空格分隔）');
+                cliError('请提供来源文档ID列表（逗号或空格分隔）');
                 return;
             }
 
@@ -325,12 +330,12 @@ function createCliHandlers(deps) {
             const markdown = positional.slice(1).join(' ').trim();
 
             if (!parentBlockId) {
-                console.error('请提供父块ID');
+                cliError('请提供父块ID');
                 return;
             }
 
             if (!markdown) {
-                console.error('请提供要追加的Markdown内容');
+                cliError('请提供要追加的Markdown内容');
                 return;
             }
 
@@ -347,12 +352,12 @@ function createCliHandlers(deps) {
             const markdown = clearMode ? '' : positional.slice(1).join(' ').trim();
 
             if (!headingBlockId) {
-                console.error('请提供标题块ID');
+                cliError('请提供标题块ID');
                 return;
             }
 
             if (!clearMode && !markdown) {
-                console.error('请提供替换内容，或使用 --clear 清空该章节');
+                cliError('请提供替换内容，或使用 --clear 清空该章节');
                 return;
             }
 
@@ -366,7 +371,7 @@ function createCliHandlers(deps) {
             const docId = positional[0];
 
             if (!docId) {
-                console.error('请提供文档ID');
+                cliError('请提供文档ID');
                 return;
             }
 
@@ -374,7 +379,7 @@ function createCliHandlers(deps) {
             const stdinPatch = await readStdinText();
             const patchText = inlinePatch || String(stdinPatch || '').trim();
             if (!patchText) {
-                console.error('请通过参数或 stdin 提供 PMF 文本');
+                cliError('请通过参数或 stdin 提供 PMF 文本');
                 return;
             }
 
@@ -428,8 +433,18 @@ function createCliHandlers(deps) {
         },
 
         tasks: async (args) => {
-            const taskStatus = args[1] || '[ ]';
-            const taskDays = parseInt(args[2]) || 7;
+            let taskStatus = '[ ]';
+            let dayArg = args[2];
+            if (args[1]) {
+                // 兼容未加引号的 [ ]（shell 会拆成两个参数）
+                if (args[1] === '[' && args[2] === ']') {
+                    taskStatus = '[ ]';
+                    dayArg = args[3];
+                } else {
+                    taskStatus = args[1];
+                }
+            }
+            const taskDays = normalizeInt(dayArg, 7, 1, 3650);
             await cliPrintFormattedResults(() => searchTasks(taskStatus, taskDays), formatResults);
         },
 
@@ -489,12 +504,12 @@ function createCliHandlers(deps) {
             const markdown = positional.slice(2).join(' ').trim();
 
             if (!notebook) {
-                console.error('请提供笔记本ID');
+                cliError('请提供笔记本ID');
                 return;
             }
 
             if (!title) {
-                console.error('请提供文档标题');
+                cliError('请提供文档标题');
                 return;
             }
 
@@ -509,18 +524,18 @@ function createCliHandlers(deps) {
             const newTitle = positional.slice(1).join(' ').trim();
 
             if (!docId) {
-                console.error('请提供文档ID');
+                cliError('请提供文档ID');
                 return;
             }
 
             if (!newTitle) {
-                console.error('请提供新标题');
+                cliError('请提供新标题');
                 return;
             }
 
             const pathInfo = await getPathByID(docId);
             if (!pathInfo || !pathInfo.notebook || !pathInfo.path) {
-                console.error(`无法获取文档路径信息: ${docId}`);
+                cliError(`无法获取文档路径信息: ${docId}`);
                 return;
             }
 
@@ -536,7 +551,7 @@ function createCliHandlers(deps) {
             const blockId = positional[0];
 
             if (!blockId) {
-                console.error('请提供块ID');
+                cliError('请提供块ID');
                 return;
             }
 
@@ -548,7 +563,7 @@ function createCliHandlers(deps) {
             }
 
             if (!markdown) {
-                console.error('请提供新的Markdown内容（参数传入或 --stdin 从标准输入读取）');
+                cliError('请提供新的Markdown内容（参数传入或 --stdin 从标准输入读取）');
                 return;
             }
 
@@ -567,6 +582,9 @@ function createCliHandlers(deps) {
         check: async () => {
             const isConnected = await checkConnection();
             console.log(isConnected ? '✅ 思源笔记连接正常' : '❌ 思源笔记连接失败');
+            if (!isConnected) {
+                process.exitCode = 1;
+            }
         },
 
         version: async () => {

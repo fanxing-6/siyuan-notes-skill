@@ -57,7 +57,7 @@ node index.js check
 | `doc-tree-id <文档ID> [深度]` | 以文档 ID 展示子文档树 |
 | `tag <标签名>` | 按标签搜索 |
 | `backlinks <块ID>` | 反向链接 |
-| `tasks [状态] [天数]` | 任务查询 |
+| `tasks "[状态]" [天数]` | 任务查询（推荐给状态加引号） |
 | `daily <开始> <结束>` | Daily Note（YYYYMMDD） |
 | `attr <属性名> [值]` | 按属性查询 |
 | `bookmarks [名称]` | 书签 |

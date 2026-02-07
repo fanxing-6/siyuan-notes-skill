@@ -13,13 +13,11 @@ allowed-tools:
 |---------|---------|---------|
 | 修改单个块内容 | `update-block`（最高效） | ~~apply-patch 整个文档~~ |
 | 删除单个块 | `delete-block`（最高效） | ~~apply-patch 整个文档~~ |
-| 批量修改已有内容 | `apply-patch`（仅 update） | |
-| 批量删除/重排块 | `apply-patch`（仅 delete/reorder） | |
-| 添加新内容 | `append-block` 逐个追加 | ~~apply-patch 插入新块~~ |
+| 批量修改已有内容 | `apply-patch`（update/delete/reorder/insert） | |
+| 批量删除/重排块 | `apply-patch`（delete/reorder） | |
+| 添加新内容 | `append-block`（简单稳妥）或 `apply-patch` insert（批量场景） | |
 | 替换章节内容 | `replace-section` | ~~apply-patch 删除+插入~~ |
 | 重构文档（如拆表格） | `replace-section --clear` + `append-block` 逐步重建 | ~~apply-patch 删除旧块+插入新块~~ |
-
-> **apply-patch 的 insert 有已知 BUG：执行时报 "invalid ID argument"。更危险的是：如果同时有 delete 和 insert，delete 先执行成功，insert 失败 → 文档被清空且无法回滚。**
 
 ## Intent Decision Tree
 
@@ -34,7 +32,7 @@ allowed-tools:
 ├─ 查看引用关系 ──────→ backlinks / unreferenced
 ├─ 修改单个块 ────────→ open-doc readable → update-block <块ID> <内容>（最高效）
 ├─ 删除单个块 ────────→ open-doc readable → delete-block <块ID>（最高效）
-├─ 批量修改已有内容 ──→ open-doc patchable → 编辑内容 → apply-patch（仅 update/delete/reorder）
+├─ 批量修改已有内容 ──→ open-doc patchable → 编辑内容 → apply-patch（支持 update/delete/reorder/insert）
 ├─ 创建新文档 ────────→ create-doc（指定笔记本、标题、可选初始内容）
 ├─ 重命名文档 ────────→ rename-doc（只需文档 ID 和新标题）
 ├─ 添加新内容 ────────→ open-doc readable → append-block（逐个追加）
@@ -230,8 +228,8 @@ node index.js open-doc "文档ID" patchable --full > /tmp/doc.pmf
 
 | 错误 | 原因 | 恢复方法 |
 |------|------|---------|
-| `invalid ID argument` | apply-patch 的新块 temp ID 无法解析 | 1. `open-doc` 检查文档状态 2. 用 `append-block` 重建丢失内容 |
-| 文档被清空 | apply-patch delete 成功但 insert 失败 | 用 `append-block` 逐步重建全部内容 |
+| `invalid ID argument` | 块 ID 不存在或格式错误 | 重新导出 `open-doc ... patchable --full`，校验 block ID 后再提交 |
+| 文档被清空 | 提交了不完整 PMF，缺失块被当作删除 | 用 `open-doc ... patchable --full` 重新导出完整 PMF 后恢复 |
 | 写入围栏报错 | 未先 open-doc 或读标记过期 | `open-doc "docID" readable` 然后重试 |
 | 版本冲突报错 | 文档在 open-doc 后被其他端修改 | `open-doc "docID" readable` 重新读取最新版本然后重试 |
 | PMF 版本冲突 | PMF 导出后文档被修改 | `open-doc "docID" patchable > /tmp/doc.pmf` 重新导出后再编辑 |
@@ -239,7 +237,7 @@ node index.js open-doc "文档ID" patchable --full > /tmp/doc.pmf
 | 只读模式报错 | 未设置 `SIYUAN_ENABLE_WRITE=true` | 在命令前加 `SIYUAN_ENABLE_WRITE=true` |
 | 文档标题为"未命名文档" | `createDocWithMd` 的 path 参数决定标题 | 用 `create-doc` CLI 命令（自动设置标题）或 `rename-doc` 修正 |
 | 连接失败 | 思源未运行/端口/Token 错误 | `node index.js check` 验证 |
-| search 返回空 | 全文索引未更新或关键词不在 markdown 字段 | 改用 SQL 查询：`node -e "const s=require('./index.js'); s.executeSiyuanQuery(\"SELECT * FROM blocks WHERE content LIKE '%关键词%' LIMIT 20\").then(r=>console.log(s.formatResults(r)))"` |
+| search 返回空 | 关键词过短/确实无匹配 | 改用 `search-in-doc` 限定文档范围，或扩大关键词上下文 |
 
 ## Output Guidance
 

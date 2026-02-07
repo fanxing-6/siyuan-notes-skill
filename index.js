@@ -7,6 +7,16 @@
 const fs = require('fs');
 const path = require('path');
 const { createCliHandlers, printCliUsage } = require('./cli');
+const { createQueryServices } = require('./lib/query-services');
+const {
+    normalizeMarkdown,
+    stripKramdownIAL,
+    parseBlocksFromKramdown,
+    renderPatchableMarkdown,
+    normalizeBlockMarkdown,
+    parsePatchableMarkdown,
+    isSameStringArray
+} = require('./lib/pmf-utils');
 const {
     strftime,
     truncateText,
@@ -50,7 +60,10 @@ function loadEnvFile() {
                         const envKey = key.trim().replace(/^export\s+/, '');
                         const value = stripOptionalWrappingQuotes(valueParts.join('=').trim());
                         if (envKey) {
-                            process.env[envKey] = value;
+                            // 保留外部已注入的环境变量优先级（便于测试和临时覆盖）
+                            if (!(envKey in process.env)) {
+                                process.env[envKey] = value;
+                            }
                         }
                     }
                 }
@@ -81,6 +94,7 @@ const SIYUAN_ALLOW_TOKEN_IN_QUERY = process.env.SIYUAN_ALLOW_TOKEN_IN_QUERY === 
 const SIYUAN_ENABLE_WRITE = process.env.SIYUAN_ENABLE_WRITE === 'true';
 const SIYUAN_REQUIRE_READ_BEFORE_WRITE = process.env.SIYUAN_REQUIRE_READ_BEFORE_WRITE !== 'false';
 const SIYUAN_READ_GUARD_TTL_SECONDS = normalizeInt(process.env.SIYUAN_READ_GUARD_TTL_SECONDS, 3600, 30, 604800);
+const SIYUAN_READ_GUARD_WRITE_GRACE_MS = normalizeInt(process.env.SIYUAN_READ_GUARD_WRITE_GRACE_MS, 8000, 1000, 60000);
 const SIYUAN_LIST_DOCUMENTS_LIMIT = normalizeInt(process.env.SIYUAN_LIST_DOCUMENTS_LIMIT, 200, 1, 2000);
 const SIYUAN_BLOCK_ROOT_CACHE_MAX = normalizeInt(process.env.SIYUAN_BLOCK_ROOT_CACHE_MAX, 5000, 100, 50000);
 const READ_GUARD_CACHE_FILE = path.join(__dirname, '.siyuan-read-guard-cache.json');
@@ -138,18 +152,6 @@ function getBasicAuthHeader() {
  */
 function escapeSqlValue(value) {
     return String(value).replace(/'/g, "''");
-}
-
-/**
- * 转义 SQL LIKE 模式中的通配符
- * @param {string|number|boolean} value - 原始值
- * @returns {string} 转义后的 LIKE 模式文本
- */
-function escapeSqlLikeValue(value) {
-    return escapeSqlValue(value)
-        .replace(/!/g, '!!')
-        .replace(/%/g, '!%')
-        .replace(/_/g, '!_');
 }
 
 /**
@@ -406,7 +408,8 @@ async function markDocumentRead(docId, source = 'unknown', updatedAt) {
     readGuardCache.docs[docId] = {
         ts: Date.now(),
         source: String(source || 'unknown'),
-        updatedAt: resolvedUpdated
+        updatedAt: resolvedUpdated,
+        lastWriteAt: 0
     };
     saveReadGuardCache();
 }
@@ -452,6 +455,14 @@ async function ensureDocumentReadBeforeWrite(docId, operation = 'write') {
             // 用 retryUpdated 再检查：如果和 stored 一致，说明是瞬时抖动
             // 如果 retryUpdated 与 currentUpdated 一致且都不等于 stored，则确实被外部修改
             if (retryUpdated && storedUpdated !== retryUpdated) {
+                const lastWriteAt = Number(meta.lastWriteAt || 0);
+                const inRecentWriteWindow = lastWriteAt > 0 && (Date.now() - lastWriteAt) <= SIYUAN_READ_GUARD_WRITE_GRACE_MS;
+                if (inRecentWriteWindow) {
+                    meta.updatedAt = retryUpdated;
+                    meta.ts = Date.now();
+                    saveReadGuardCache();
+                    return;
+                }
                 throw new Error(
                     `读后写围栏: 文档 ${docId} 自上次读取后已被修改` +
                     `（读取时版本: ${storedUpdated}, 当前版本: ${retryUpdated}）。` +
@@ -513,6 +524,7 @@ async function ensureBlockReadBeforeWrite(blockId, operation = 'write') {
 
     const rootDocId = await getRootDocIdByBlockId(blockId);
     await ensureDocumentReadBeforeWrite(rootDocId, operation);
+    return rootDocId;
 }
 
 /**
@@ -531,20 +543,33 @@ async function refreshDocumentVersion(docId) {
     }
 
     try {
-        // 轮询直到 updated 连续两次相同（最多 5 轮，每轮间隔 150ms）
-        let prev = '';
-        for (let i = 0; i < 5; i++) {
+        const baselineUpdated = meta.updatedAt || '';
+        let candidateUpdated = baselineUpdated;
+        let stableCount = 0;
+
+        // 短轮询等待 updated 稳定，避免连续写入时过长阻塞
+        for (let i = 0; i < 8; i++) {
             const currentMeta = await getDocumentMeta(docId);
-            const cur = currentMeta?.updated || '';
-            if (cur && cur === prev) {
-                break; // 稳定
+            const currentUpdated = currentMeta?.updated || '';
+            if (currentUpdated) {
+                if (currentUpdated === candidateUpdated) {
+                    stableCount += 1;
+                    if (stableCount >= 2) {
+                        break;
+                    }
+                } else {
+                    candidateUpdated = currentUpdated;
+                    stableCount = 1;
+                }
             }
-            prev = cur;
-            if (i < 4) {
-                await new Promise(r => setTimeout(r, 150));
+
+            if (i < 7) {
+                await new Promise(r => setTimeout(r, 80));
             }
         }
-        meta.updatedAt = prev;
+
+        meta.updatedAt = candidateUpdated || baselineUpdated;
+        meta.lastWriteAt = Date.now();
         meta.ts = Date.now();
         saveReadGuardCache();
     } catch (_) {
@@ -1542,13 +1567,14 @@ async function updateBlock(id, markdown) {
     ensureWriteEnabled();
     assertNonEmptyString(id, 'id');
     assertNonEmptyString(markdown, 'markdown');
-    await ensureBlockReadBeforeWrite(id, 'updateBlock');
-
-    return await requestSiyuanApi(API_ENDPOINTS.UPDATE_BLOCK, {
+    const rootDocId = await ensureBlockReadBeforeWrite(id, 'updateBlock');
+    const result = await requestSiyuanApi(API_ENDPOINTS.UPDATE_BLOCK, {
         id,
         dataType: 'markdown',
         data: markdown
     }, { requireAuth: true });
+    await refreshDocumentVersion(rootDocId);
+    return result;
 }
 
 /**
@@ -1559,8 +1585,10 @@ async function updateBlock(id, markdown) {
 async function deleteBlock(id) {
     ensureWriteEnabled();
     assertNonEmptyString(id, 'id');
-    await ensureBlockReadBeforeWrite(id, 'deleteBlock');
-    return await requestSiyuanApi(API_ENDPOINTS.DELETE_BLOCK, { id }, { requireAuth: true });
+    const rootDocId = await ensureBlockReadBeforeWrite(id, 'deleteBlock');
+    const result = await requestSiyuanApi(API_ENDPOINTS.DELETE_BLOCK, { id }, { requireAuth: true });
+    await refreshDocumentVersion(rootDocId);
+    return result;
 }
 
 /**
@@ -1843,345 +1871,29 @@ async function appendMarkdownToBlock(parentBlockId, markdown) {
     };
 }
 
-/**
- * 搜索包含关键词的笔记内容 (基于思源SQL规范)
- * @param {string} keyword - 搜索关键词
- * @param {number} limit - 返回结果数量限制
- * @param {string} blockType - 块类型过滤
- * @returns {Promise<Array>} 查询结果
- */
-async function searchNotes(keyword, limit = 20, blockType = null) {
-    const safeKeyword = escapeSqlLikeValue(keyword);
-    const safeLimit = normalizeInt(limit, 20, 1, 200);
-    let sql = `
-        SELECT id, content, type, subtype, created, updated, root_id, parent_id, box, path, hpath
-        FROM blocks
-        WHERE markdown LIKE '%${safeKeyword}%' ESCAPE '!'
-    `;
-
-    if (blockType) {
-        const safeBlockType = escapeSqlValue(blockType);
-        sql += ` AND type = '${safeBlockType}'`;
-    }
-
-    sql += `
-        ORDER BY updated DESC
-        LIMIT ${safeLimit}
-    `;
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 在指定文档内搜索关键词
- * @param {string} docId - 文档ID（root_id）
- * @param {string} keyword - 搜索关键词
- * @param {number} limit - 返回结果数量限制
- * @returns {Promise<Array>} 查询结果
- */
-async function searchInDocument(docId, keyword, limit = 20) {
-    assertNonEmptyString(docId, 'docId');
-    assertNonEmptyString(keyword, 'keyword');
-    const safeDocId = escapeSqlValue(docId);
-    const safeKeyword = escapeSqlValue(keyword);
-    const safeLimit = normalizeInt(limit, 20, 1, 200);
-    const sql = `
-        SELECT id, content, type, subtype, created, updated, parent_id
-        FROM blocks
-        WHERE root_id = '${safeDocId}'
-        AND (
-            instr(markdown, '${safeKeyword}') > 0
-            OR instr(content, '${safeKeyword}') > 0
-        )
-        ORDER BY updated DESC
-        LIMIT ${safeLimit}
-    `;
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 查询所有文档块
- * @param {string} notebookId - 笔记本ID过滤
- * @param {number} limit - 返回数量上限
- * @returns {Promise<Array>} 文档列表
- */
-async function listDocuments(notebookId = null, limit = SIYUAN_LIST_DOCUMENTS_LIMIT) {
-    const safeLimit = normalizeInt(limit, SIYUAN_LIST_DOCUMENTS_LIMIT, 1, 2000);
-    let sql = `
-        SELECT id, content, created, updated, box, path, hpath
-        FROM blocks
-        WHERE type = 'd'
-    `;
-
-    if (notebookId) {
-        sql += ` AND box = '${escapeSqlValue(notebookId)}'`;
-    }
-
-    sql += ` ORDER BY updated DESC LIMIT ${safeLimit}`;
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 查询指定文档下的标题块
- * @param {string} rootId - 根文档ID
- * @param {string} headingType - 标题类型 (h1, h2等)
- * @returns {Promise<Array>} 标题列表
- */
-async function getDocumentHeadings(rootId, headingType = null) {
-    const safeRootId = escapeSqlValue(rootId);
-    let sql = `
-        SELECT id, content, subtype, created, updated, parent_id
-        FROM blocks
-        WHERE root_id = '${safeRootId}'
-        AND type = 'h'
-    `;
-
-    if (headingType) {
-        sql += ` AND subtype = '${escapeSqlValue(headingType)}'`;
-    }
-
-    sql += ' ORDER BY created ASC';
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 查询指定文档的所有子块
- * @param {string} rootId - 根文档ID
- * @param {string} blockType - 块类型过滤
- * @returns {Promise<Array>} 子块列表
- */
-async function getDocumentBlocks(rootId, blockType = null) {
-    const safeRootId = escapeSqlValue(rootId);
-    let sql = `
-        SELECT id, content, type, subtype, created, updated, parent_id, ial
-        FROM blocks
-        WHERE root_id = '${safeRootId}'
-    `;
-
-    if (blockType) {
-        sql += ` AND type = '${escapeSqlValue(blockType)}'`;
-    }
-
-    sql += ' ORDER BY created ASC';
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 查询包含特定标签的笔记
- * @param {string} tag - 标签名 (不需要包含#)
- * @param {number} limit - 返回结果数量限制
- * @returns {Promise<Array>} 包含标签的笔记列表
- */
-async function searchByTag(tag, limit = 20) {
-    const normalizedTag = String(tag || '').trim().replace(/^#+|#+$/g, '');
-    assertNonEmptyString(normalizedTag, 'tag');
-    const safeTag = escapeSqlLikeValue(normalizedTag);
-    const safeLimit = normalizeInt(limit, 20, 1, 200);
-    const sql = `
-        SELECT id, content, type, subtype, created, updated, root_id, parent_id
-        FROM blocks
-        WHERE tag LIKE '%#${safeTag}#%' ESCAPE '!'
-        ORDER BY updated DESC
-        LIMIT ${safeLimit}
-    `;
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 查询块的反向链接 (引用了这个块的所有块)
- * @param {string} defBlockId - 被引用的块ID
- * @param {number} limit - 返回结果数量限制
- * @returns {Promise<Array>} 反向链接列表
- */
-async function getBacklinks(defBlockId, limit = 999) {
-    const safeDefBlockId = escapeSqlValue(defBlockId);
-    const safeLimit = normalizeInt(limit, 999, 1, 2000);
-    const sql = `
-        SELECT * FROM blocks
-        WHERE id IN (
-            SELECT block_id FROM refs WHERE def_block_id = '${safeDefBlockId}'
-        )
-        ORDER BY updated DESC
-        LIMIT ${safeLimit}
-    `;
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 查询任务列表
- * @param {string} status - 任务状态 ('[ ]'未完成, '[x]'已完成, '[-]'进行中)
- * @param {number} days - 查询最近N天的任务
- * @param {number} limit - 返回结果数量限制
- * @returns {Promise<Array>} 任务列表
- */
-async function searchTasks(status = '[ ]', days = 7, limit = 50) {
-    const safeStatus = escapeSqlValue(status);
-    const safeDays = normalizeInt(days, 7, 1, 3650);
-    const safeLimit = normalizeInt(limit, 50, 1, 500);
-    const sql = `
-        SELECT * FROM blocks
-        WHERE type = 'l' AND subtype = 't'
-        AND created > strftime('%Y%m%d%H%M%S', datetime('now', '-${safeDays} day'))
-        AND markdown LIKE '* ${safeStatus} %'
-        AND parent_id NOT IN (
-            SELECT id FROM blocks WHERE subtype = 't'
-        )
-        ORDER BY updated DESC
-        LIMIT ${safeLimit}
-    `;
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 查询Daily Note (日记)
- * @param {string} startDate - 开始日期 (格式: YYYYMMDD)
- * @param {string} endDate - 结束日期 (格式: YYYYMMDD)
- * @returns {Promise<Array>} Daily Note列表
- */
-async function getDailyNotes(startDate, endDate) {
-    const safeStartDate = escapeSqlValue(startDate);
-    const safeEndDate = escapeSqlValue(endDate);
-    const sql = `
-        SELECT DISTINCT B.* FROM blocks AS B
-        JOIN attributes AS A ON B.id = A.block_id
-        WHERE A.name LIKE 'custom-dailynote-%'
-        AND B.type = 'd'
-        AND A.value >= '${safeStartDate}'
-        AND A.value <= '${safeEndDate}'
-        ORDER BY A.value DESC
-    `;
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 查询包含特定属性的块
- * @param {string} attrName - 属性名称
- * @param {string} attrValue - 属性值 (可选)
- * @param {number} limit - 返回结果数量限制
- * @returns {Promise<Array>} 包含属性的块列表
- */
-async function searchByAttribute(attrName, attrValue = null, limit = 20) {
-    const safeAttrName = escapeSqlValue(attrName);
-    const safeLimit = normalizeInt(limit, 20, 1, 500);
-    let sql = `
-        SELECT * FROM blocks
-        WHERE id IN (
-            SELECT block_id FROM attributes
-            WHERE name = '${safeAttrName}'
-    `;
-
-    if (attrValue) {
-        sql += ` AND value = '${escapeSqlValue(attrValue)}'`;
-    }
-
-    sql += `
-        )
-        ORDER BY updated DESC
-        LIMIT ${safeLimit}
-    `;
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 查询书签
- * @param {string} bookmarkName - 书签名 (可选)
- * @returns {Promise<Array>} 书签列表
- */
-async function getBookmarks(bookmarkName = null) {
-    let sql = `
-        SELECT * FROM blocks
-        WHERE id IN (
-            SELECT block_id FROM attributes
-            WHERE name = 'bookmark'
-    `;
-
-    if (bookmarkName) {
-        sql += ` AND value = '${escapeSqlValue(bookmarkName)}'`;
-    }
-
-    sql += ') ORDER BY updated DESC';
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 随机漫游某个文档内的标题块
- * @param {string} rootId - 文档ID
- * @returns {Promise<Array>} 随机标题块
- */
-async function getRandomHeading(rootId) {
-    const safeRootId = escapeSqlValue(rootId);
-    const sql = `
-        SELECT * FROM blocks
-        WHERE root_id = '${safeRootId}' AND type = 'h'
-        ORDER BY random() LIMIT 1
-    `;
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 查询最近创建或修改的块
- * @param {number} days - 天数
- * @param {string} orderBy - 排序方式 (created/updated)
- * @param {string} blockType - 块类型过滤
- * @param {number} limit - 返回结果数量限制
- * @returns {Promise<Array>} 最近块列表
- */
-async function getRecentBlocks(days = 7, orderBy = 'updated', blockType = null, limit = 50) {
-    const safeDays = normalizeInt(days, 7, 1, 3650);
-    const safeLimit = normalizeInt(limit, 50, 1, 500);
-    const safeOrderBy = orderBy === 'created' ? 'created' : 'updated';
-    const dateThreshold = strftime('%Y%m%d%H%M%S', Date.now() - (safeDays * 24 * 60 * 60 * 1000));
-
-    let sql = `
-        SELECT id, content, type, subtype, created, updated, root_id, box, hpath
-        FROM blocks
-        WHERE ${safeOrderBy} > '${dateThreshold}'
-    `;
-
-    if (blockType) {
-        sql += ` AND type = '${escapeSqlValue(blockType)}'`;
-    }
-
-    sql += `
-        ORDER BY ${safeOrderBy} DESC
-        LIMIT ${safeLimit}
-    `;
-
-    return await executeSiyuanQuery(sql);
-}
-
-/**
- * 查询笔记本下未被引用的文档
- * @param {string} notebookId - 笔记本ID
- * @param {number} limit - 返回结果数量限制
- * @returns {Promise<Array>} 未被引用的文档列表
- */
-async function getUnreferencedDocuments(notebookId, limit = 128) {
-    const safeNotebookId = escapeSqlValue(notebookId);
-    const safeLimit = normalizeInt(limit, 128, 1, 1000);
-    const sql = `
-        SELECT * FROM blocks AS B
-        WHERE B.type = 'd'
-        AND box = '${safeNotebookId}'
-        AND B.id NOT IN (
-            SELECT DISTINCT R.def_block_id FROM refs AS R
-        )
-        ORDER BY updated DESC
-        LIMIT ${safeLimit}
-    `;
-
-    return await executeSiyuanQuery(sql);
-}
+const {
+    searchNotes,
+    searchInDocument,
+    listDocuments,
+    getDocumentHeadings,
+    getDocumentBlocks,
+    searchByTag,
+    getBacklinks,
+    searchTasks,
+    getDailyNotes,
+    searchByAttribute,
+    getBookmarks,
+    getRandomHeading,
+    getRecentBlocks,
+    getUnreferencedDocuments
+} = createQueryServices({
+    executeSiyuanQuery,
+    escapeSqlValue,
+    normalizeInt,
+    assertNonEmptyString,
+    strftime,
+    listDocumentsLimit: SIYUAN_LIST_DOCUMENTS_LIMIT
+});
 
 /**
  * 检查思源笔记连接状态
@@ -2259,6 +1971,7 @@ async function main() {
 
     // 除了check/version命令，其他命令都需要检查环境配置
     if (args.length > 0 && command !== 'check' && command !== 'version' && !checkEnvironmentConfig()) {
+        process.exitCode = 1;
         return;
     }
 
@@ -2271,29 +1984,26 @@ async function main() {
         const handler = CLI_HANDLERS[command];
         if (!handler) {
             console.error(`未知命令: ${command}`);
+            process.exitCode = 1;
             return;
         }
 
         await handler(args);
     } catch (error) {
         console.error('执行失败:', error.message);
+        process.exitCode = 1;
     }
 }
 
 // 导出函数供其他模块使用
 module.exports = {
-    requestSiyuanApi,
     executeSiyuanQuery,
     getSystemVersion,
     listNotebooks,
     createDocWithMd,
     renameDoc,
-    exportMdContent,
-    getBlockKramdown,
     getChildBlocks,
-    getBlockAttrs,
     updateBlock,
-    getHPathByID,
     getPathByID,
     getIDsByHPath,
     listDocsByPath,
@@ -2302,18 +2012,12 @@ module.exports = {
     getDocumentTreeByID,
     analyzeDocumentTree,
     renderDocumentTreeMarkdown,
-    moveDocsByID,
     planMoveDocsByID,
     reorganizeSubdocsByID,
     analyzeSubdocMovePlan,
-    appendBlock,
-    insertBlock,
-    moveBlock,
     deleteBlock,
     appendMarkdownToBlock,
-    getSectionChildBlockIds,
     openSection,
-    planReplaceSection,
     replaceSection,
     searchNotes,
     searchInDocument,
@@ -2331,15 +2035,10 @@ module.exports = {
     getRecentBlocks,
     getUnreferencedDocuments,
     openDocument,
-    openDocumentReadableView,
-    openDocumentPatchableView,
     renderPatchableMarkdown,
     parsePatchableMarkdown,
-    buildApplyPatchPlan,
-    executeApplyPatchPlan,
     applyPatchToDocument,
     parseBlocksFromKramdown,
-    renderSearchResultsMarkdown,
     normalizeMarkdown,
     stripKramdownIAL,
     checkConnection,
@@ -2352,78 +2051,6 @@ module.exports = {
 // 如果直接运行此文件，执行主函数
 if (require.main === module) {
     main();
-}
-
-/**
- * 规范化Markdown内容
- * @param {string} markdown - 原始Markdown
- * @returns {string} 规范化后的Markdown
- */
-function normalizeMarkdown(markdown) {
-    const raw = String(markdown || '');
-    const normalizedNewlines = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    return normalizedNewlines.replace(/\n{3,}/g, '\n\n').trim();
-}
-
-/**
- * 更新 fenced code 状态
- * @param {Object} state - 当前状态
- * @param {string} line - 当前行
- */
-function updateFenceState(state, line) {
-    const text = String(line || '').trimStart();
-    const match = text.match(/^(`{3,}|~{3,})/);
-    if (!match) {
-        return;
-    }
-
-    const marker = match[1];
-    const char = marker[0];
-    const size = marker.length;
-
-    if (!state.active) {
-        state.active = true;
-        state.char = char;
-        state.size = size;
-        return;
-    }
-
-    if (state.char === char && size >= state.size) {
-        state.active = false;
-        state.char = '';
-        state.size = 0;
-    }
-}
-
-/**
- * 清理kramdown中的IAL标记，尽量还原为常规Markdown
- * @param {string} markdown - kramdown片段
- * @returns {string} 清理后的markdown
- */
-function stripKramdownIAL(markdown) {
-    const lines = String(markdown || '').split('\n');
-    const output = [];
-    const fenceState = { active: false, char: '', size: 0 };
-
-    for (const line of lines) {
-        const inFence = fenceState.active;
-        const trimmed = line.trim();
-        if (!inFence && /^\{:[^}]*\}$/.test(trimmed)) {
-            updateFenceState(fenceState, line);
-            continue;
-        }
-
-        const cleaned = inFence
-            ? line
-            : line
-                .replace(/\s+\{:[^}]*\}\s*$/g, '')
-                .replace(/\s+$/g, '');
-
-        output.push(cleaned);
-        updateFenceState(fenceState, line);
-    }
-
-    return normalizeMarkdown(output.join('\n'));
 }
 
 /**
@@ -2629,134 +2256,6 @@ async function openDocumentReadableView(docId, options = {}) {
 }
 
 /**
- * 推断块类型
- * @param {string} markdown - 块Markdown
- * @returns {{type: string, subType: string}} 推断结果
- */
-function inferBlockType(markdown) {
-    const nonEmptyLines = String(markdown || '')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
-    const firstLine = nonEmptyLines[0] || '';
-    const secondLine = nonEmptyLines[1] || '';
-
-    if (/^```/.test(firstLine)) {
-        return { type: 'c', subType: '' };
-    }
-
-    if (/^\$\$/.test(firstLine)) {
-        return { type: 'm', subType: '' };
-    }
-
-    if (/^\|.*\|$/.test(firstLine) && /^\|\s*[:\-]+\s*(\|\s*[:\-]+\s*)+\|?$/.test(secondLine)) {
-        return { type: 't', subType: '' };
-    }
-
-    const headingMatch = firstLine.match(/^(#{1,6})\s+/);
-    if (headingMatch) {
-        const level = headingMatch[1].length;
-        return { type: 'h', subType: `h${level}` };
-    }
-
-    if (/^\s*[-*+]\s+\[[ xX-]\]\s+/.test(firstLine)) {
-        return { type: 'l', subType: 't' };
-    }
-
-    if (/^\s*[-*+]\s+/.test(firstLine)) {
-        return { type: 'l', subType: 'u' };
-    }
-
-    if (/^\s*\d+[.)]\s+/.test(firstLine)) {
-        return { type: 'l', subType: 'o' };
-    }
-
-    if (/^\s*>\s+/.test(firstLine)) {
-        return { type: 'b', subType: '' };
-    }
-
-    return { type: 'p', subType: '' };
-}
-
-/**
- * 从kramdown解析块序列
- * @param {string} kramdown - kramdown文本
- * @param {Object} parentIdMap - 块ID到父块ID映射
- * @returns {Array} 块列表
- */
-function parseBlocksFromKramdown(kramdown, parentIdMap = {}) {
-    const text = String(kramdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    if (!text.trim()) {
-        return [];
-    }
-
-    const lines = text.split('\n');
-    const blocks = [];
-    let buffer = [];
-
-    for (const line of lines) {
-        const match = line.match(/^\{:[^}]*\bid="([^"]+)"[^}]*\}\s*$/);
-        if (!match) {
-            buffer.push(line);
-            continue;
-        }
-
-        const markdown = buffer.join('\n').trimEnd();
-        const cleanedMarkdown = stripKramdownIAL(markdown);
-        const id = match[1];
-        const inferred = inferBlockType(cleanedMarkdown);
-        blocks.push({
-            id,
-            markdown: cleanedMarkdown,
-            type: inferred.type,
-            subType: inferred.subType,
-            parentId: parentIdMap[id] || ''
-        });
-        buffer = [];
-    }
-
-    if (buffer.join('\n').trim()) {
-        const markdown = buffer.join('\n').trimEnd();
-        const cleanedMarkdown = stripKramdownIAL(markdown);
-        const inferred = inferBlockType(cleanedMarkdown);
-        blocks.push({
-            id: `tail-${blocks.length + 1}`,
-            markdown: cleanedMarkdown,
-            type: inferred.type,
-            subType: inferred.subType,
-            parentId: ''
-        });
-    }
-
-    return blocks.filter((block) => block.markdown.trim().length > 0);
-}
-
-/**
- * 渲染Patchable Markdown Format (PMF v1)
- * @param {Object} params - 渲染参数
- * @param {string} params.docId - 文档ID
- * @param {Object} params.meta - 文档元信息
- * @param {Array} params.blocks - 块列表
- * @returns {string} patchable markdown
- */
-function renderPatchableMarkdown({ docId, meta, blocks }) {
-    const lines = [];
-    const updatedPart = meta.updated ? ` updated=${meta.updated}` : '';
-    lines.push(`<!-- @siyuan:doc id=${docId} hpath=${JSON.stringify(meta.hpath || '')} view=patchable pmf=v1${updatedPart} -->`);
-    lines.push('');
-
-    blocks.forEach((block) => {
-        const subTypePart = block.subType ? ` subType=${block.subType}` : '';
-        const parentPart = block.parentId ? ` parent=${block.parentId}` : '';
-        lines.push(`<!-- @siyuan:block id=${block.id} type=${block.type}${subTypePart}${parentPart} -->`);
-        lines.push(block.markdown);
-        lines.push('');
-    });
-
-    return lines.join('\n').trim();
-}
-
-/**
  * 读取文档Patchable视图（支持分页）
  * @param {string} docId - 文档ID
  * @param {Object} [options] - 选项
@@ -2882,168 +2381,6 @@ async function searchNotesMarkdown(keyword, limit = 20, blockType = null) {
         results,
         limit: safeLimit
     });
-}
-
-/**
- * 规范化块内容（用于比较）
- * @param {string} markdown - 原始内容
- * @returns {string} 规范化内容
- */
-function normalizeBlockMarkdown(markdown) {
-    return String(markdown || '')
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n')
-        .replace(/^\n+/, '')
-        .replace(/\n+$/, '');
-}
-
-/**
- * 解析PMF注释属性
- * @param {string} raw - 属性文本
- * @returns {Object} 属性对象
- */
-function parsePmfAttributes(raw) {
-    const attrs = {};
-    const text = String(raw || '');
-    const regex = /([a-zA-Z_][\w-]*)=("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)/g;
-    let match;
-
-    while ((match = regex.exec(text)) !== null) {
-        const key = match[1];
-        let value = match[2];
-
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-            const quote = value[0];
-            value = value.slice(1, -1);
-            if (quote === '"') {
-                try {
-                    value = JSON.parse(`"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
-                } catch (error) {
-                    // fallback: keep raw unescaped content
-                }
-            }
-        }
-
-        attrs[key] = value;
-    }
-
-    return attrs;
-}
-
-/**
- * 解析Patchable Markdown Format
- * @param {string} patchableMarkdown - PMF文本
- * @returns {{doc: Object, blocks: Array}} 解析结果
- */
-function parsePatchableMarkdown(patchableMarkdown) {
-    const text = String(patchableMarkdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const lines = text.split('\n');
-
-    const result = {
-        doc: {},
-        blocks: []
-    };
-
-    let currentBlock = null;
-    let buffer = [];
-    let fenceState = { active: false, char: '', size: 0 };
-
-    const flushBlock = () => {
-        if (!currentBlock) {
-            return;
-        }
-
-        const markdown = normalizeBlockMarkdown(buffer.join('\n'));
-        result.blocks.push({
-            id: currentBlock.id,
-            type: currentBlock.type || inferBlockType(markdown).type,
-            subType: currentBlock.subType || '',
-            parentId: currentBlock.parentId || '',
-            markdown
-        });
-
-        currentBlock = null;
-        buffer = [];
-        fenceState = { active: false, char: '', size: 0 };
-    };
-
-    for (const line of lines) {
-        if (!currentBlock) {
-            const docMatch = line.match(/^<!--\s*@siyuan:doc\s+(.+?)\s*-->$/);
-            if (docMatch && result.blocks.length === 0) {
-                result.doc = parsePmfAttributes(docMatch[1]);
-                continue;
-            }
-
-            const blockMatch = line.match(/^<!--\s*@siyuan:block\s+(.+?)\s*-->$/);
-            if (blockMatch) {
-                const attrs = parsePmfAttributes(blockMatch[1]);
-                if (!attrs.id) {
-                    throw new Error('PMF 格式错误: block marker 缺少 id');
-                }
-
-                currentBlock = {
-                    id: String(attrs.id),
-                    type: attrs.type ? String(attrs.type) : '',
-                    subType: attrs.subType ? String(attrs.subType) : '',
-                    parentId: attrs.parent ? String(attrs.parent) : (attrs.parentID ? String(attrs.parentID) : '')
-                };
-                continue;
-            }
-
-            continue;
-        }
-
-        if (!fenceState.active) {
-            const blockMatch = line.match(/^<!--\s*@siyuan:block\s+(.+?)\s*-->$/);
-            if (blockMatch) {
-                flushBlock();
-                const attrs = parsePmfAttributes(blockMatch[1]);
-                if (!attrs.id) {
-                    throw new Error('PMF 格式错误: block marker 缺少 id');
-                }
-
-                currentBlock = {
-                    id: String(attrs.id),
-                    type: attrs.type ? String(attrs.type) : '',
-                    subType: attrs.subType ? String(attrs.subType) : '',
-                    parentId: attrs.parent ? String(attrs.parent) : (attrs.parentID ? String(attrs.parentID) : '')
-                };
-                continue;
-            }
-        }
-
-        buffer.push(line);
-        updateFenceState(fenceState, line);
-    }
-
-    flushBlock();
-
-    if (!result.doc.id && result.blocks.length === 0) {
-        throw new Error('PMF 解析失败: 未找到 @siyuan:doc 或 @siyuan:block 标记');
-    }
-
-    return result;
-}
-
-/**
- * 比较两个字符串数组是否一致
- * @param {Array<string>} a - 数组A
- * @param {Array<string>} b - 数组B
- * @returns {boolean} 是否一致
- */
-function isSameStringArray(a, b) {
-    if (a.length !== b.length) {
-        return false;
-    }
-
-    for (let i = 0; i < a.length; i += 1) {
-        if (a[i] !== b[i]) {
-            return false;
-        }
-    }
-
-    return true;
 }
 
 /**

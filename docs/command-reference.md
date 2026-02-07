@@ -231,13 +231,15 @@ node index.js backlinks <块ID>
 ### tasks — 任务查询
 
 ```bash
-node index.js tasks [状态] [天数]
+node index.js tasks "[ ]" [天数]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
 |------|------|--------|------|
-| 状态 | 否 | `[ ]` | `[ ]`未完成 `[x]`已完成 `[-]`进行中 |
+| 状态 | 否 | `[ ]` | `[ ]`未完成 `[x]/[X]`已完成 `[-]`进行中 |
 | 天数 | 否 | 7 | 时间范围 |
+
+未加引号的 `[ ]` 也可用（CLI 会自动兼容 shell 拆参）。
 
 **返回**：格式化文本
 
@@ -457,7 +459,7 @@ node index.js apply-patch <文档ID> < patch.pmf
 
 **返回**：JSON，含 `plan.summary` 和 `execution`
 
-> **重要限制：仅用于修改已有块内容、删除块、重排块。不要用来插入新块（会导致 "invalid ID argument" 且可能丢失数据）。** 详见 [docs/pmf-spec.md](pmf-spec.md)。
+> **支持范围：update / delete / reorder / insert。** 详见 [docs/pmf-spec.md](pmf-spec.md)。
 >
 > **PMF 必须完整**：提交的 PMF 文件必须包含文档的**所有**块。缺失的块会被视为删除操作。正确做法是先 `open-doc patchable > /tmp/doc.pmf` 导出完整 PMF，只修改目标块的文本内容，然后提交完整文件。**不要只写目标块的 PMF**，否则其他所有块都会被删除。
 >
@@ -578,7 +580,7 @@ JS API 方式（兜底）：
 node index.js open-doc "文档ID" readable
 SIYUAN_ENABLE_WRITE=true node -e "
 const s = require('./index.js');
-s.updateBlock('块ID', 'kramdown', '新的 Markdown 内容').then(r => console.log(JSON.stringify(r)));
+s.updateBlock('块ID', '新的 Markdown 内容').then(r => console.log(JSON.stringify(r)));
 "
 ```
 
@@ -633,12 +635,12 @@ s.renameDoc('笔记本ID', '/文档存储路径.sy', '新标题').then(r => cons
 
 ### "invalid ID argument"
 
-**原因**：传给思源 API 的块 ID 不存在（通常是 apply-patch 的 temp ID 问题）
+**原因**：传给思源 API 的块 ID 不存在或格式不正确（常见于手工编辑 PMF 时 block id 写错）
 
 **恢复**：
-1. 立即 `open-doc "docID" readable` 检查文档当前状态
-2. 如果文档被清空，用 append-block 逐步重建内容
-3. 以后避免在 apply-patch 中插入新块
+1. 先 `open-doc "docID" patchable --full > /tmp/doc.pmf` 重新导出基线
+2. 只保留合法块 ID；新块使用唯一临时 ID（如 `tmp-xxx`）
+3. 再次 `apply-patch`
 
 ### 写入围栏报错
 
