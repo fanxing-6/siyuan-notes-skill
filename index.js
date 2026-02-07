@@ -84,6 +84,8 @@ const SIYUAN_READ_GUARD_TTL_SECONDS = normalizeInt(process.env.SIYUAN_READ_GUARD
 const SIYUAN_LIST_DOCUMENTS_LIMIT = normalizeInt(process.env.SIYUAN_LIST_DOCUMENTS_LIMIT, 200, 1, 2000);
 const SIYUAN_BLOCK_ROOT_CACHE_MAX = normalizeInt(process.env.SIYUAN_BLOCK_ROOT_CACHE_MAX, 5000, 100, 50000);
 const READ_GUARD_CACHE_FILE = path.join(__dirname, '.siyuan-read-guard-cache.json');
+const OPEN_DOC_CHAR_LIMIT = normalizeInt(process.env.SIYUAN_OPEN_DOC_CHAR_LIMIT, 15000, 1000, 1000000);
+const OPEN_DOC_BLOCK_PAGE_SIZE = normalizeInt(process.env.SIYUAN_OPEN_DOC_BLOCK_PAGE_SIZE, 50, 5, 10000);
 
 /** API端点配置 */
 const API_BASE_URL = `${SIYUAN_USE_HTTPS ? 'https' : 'http'}://${SIYUAN_HOST}${SIYUAN_PORT ? ':' + SIYUAN_PORT : ''}`;
@@ -1580,6 +1582,139 @@ function normalizeWritableMarkdown(markdown) {
 }
 
 /**
+ * 读取标题块的章节子块 ID 列表（只读 helper，不涉及写入逻辑）
+ * @param {string} headingBlockId - 标题块ID
+ * @returns {Promise<{headingBlockId: string, rootDocId: string, headingSubtype: string, childBlockIds: string[]}>}
+ */
+async function getSectionChildBlockIds(headingBlockId) {
+    assertNonEmptyString(headingBlockId, 'headingBlockId');
+    if (!isLikelyBlockId(headingBlockId)) {
+        throw new Error('headingBlockId 格式不正确');
+    }
+
+    const dbType = await getBlockTypeById(headingBlockId);
+    if (!dbType) {
+        throw new Error('未找到目标块，请确认 headingBlockId 是否存在');
+    }
+    if (dbType !== 'h') {
+        throw new Error(`目标块不是标题块(type=${dbType})，open-section 仅支持标题块`);
+    }
+
+    const rootDocId = await getRootDocIdByBlockId(headingBlockId);
+
+    // 获取标题的 subtype (h1-h6)
+    const safeId = escapeSqlValue(headingBlockId);
+    const rows = await executeSiyuanQuery(`SELECT subtype FROM blocks WHERE id = '${safeId}' LIMIT 1`);
+    const headingSubtype = rows?.[0]?.subtype || '';
+
+    const childBlocks = await getChildBlocks(headingBlockId);
+    const childBlockIds = childBlocks.map((item) => item?.id).filter(Boolean);
+
+    return { headingBlockId, rootDocId, headingSubtype, childBlockIds };
+}
+
+/**
+ * 限流并发映射
+ * @param {Array} items - 输入数组
+ * @param {number} concurrency - 最大并发数
+ * @param {Function} mapper - 映射函数
+ * @returns {Promise<Array>} 映射结果
+ */
+async function mapWithConcurrency(items, concurrency, mapper) {
+    if (!Array.isArray(items) || items.length === 0) {
+        return [];
+    }
+
+    const parsed = Number.parseInt(concurrency, 10);
+    const safeConcurrency = Number.isNaN(parsed)
+        ? 1
+        : Math.max(1, Math.min(parsed, items.length));
+
+    const results = new Array(items.length);
+    let currentIndex = 0;
+
+    async function worker() {
+        while (true) {
+            const index = currentIndex;
+            currentIndex += 1;
+            if (index >= items.length) {
+                return;
+            }
+            results[index] = await mapper(items[index], index);
+        }
+    }
+
+    await Promise.all(Array.from({ length: safeConcurrency }, () => worker()));
+    return results;
+}
+
+/**
+ * 打开标题章节的内容视图
+ * @param {string} headingBlockId - 标题块ID
+ * @param {string} view - readable|patchable
+ * @returns {Promise<string>} 渲染后的文本
+ */
+async function openSection(headingBlockId, view = 'readable') {
+    const section = await getSectionChildBlockIds(headingBlockId);
+    await markDocumentRead(section.rootDocId, 'openSection');
+
+    if (view === 'patchable') {
+        // 限流并发获取所有子块的 kramdown，避免大章节瞬时打满请求
+        const allIds = [section.headingBlockId, ...section.childBlockIds];
+        const kramdownResults = await mapWithConcurrency(allIds, 8, (id) => getBlockKramdown(id));
+        const headingParsed = parseBlocksFromKramdown(kramdownResults[0], {});
+        const blocks = [];
+        for (let i = 1; i < kramdownResults.length; i++) {
+            blocks.push(...parseBlocksFromKramdown(kramdownResults[i], {}));
+        }
+
+        const meta = await getDocumentMeta(section.rootDocId);
+        const allBlocks = [...headingParsed, ...blocks];
+        const lines = [];
+        const updatedPart = meta.updated ? ` updated=${meta.updated}` : '';
+        lines.push(`<!-- @siyuan:doc id=${section.rootDocId} hpath=${JSON.stringify(meta.hpath || '')} view=patchable pmf=v1 partial=true section=${section.headingBlockId}${updatedPart} -->`);
+        lines.push('');
+        for (const block of allBlocks) {
+            const subTypePart = block.subType ? ` subType=${block.subType}` : '';
+            const parentPart = block.parentId ? ` parent=${block.parentId}` : '';
+            lines.push(`<!-- @siyuan:block id=${block.id} type=${block.type}${subTypePart}${parentPart} -->`);
+            lines.push(block.markdown);
+            lines.push('');
+        }
+        return lines.join('\n').trim();
+    }
+
+    // readable 视图：限流并发获取所有块的 kramdown
+    const allIds = [section.headingBlockId, ...section.childBlockIds];
+    const kramdownResults = await mapWithConcurrency(allIds, 8, (id) => getBlockKramdown(id));
+    const headingMd = stripKramdownIAL(kramdownResults[0]);
+    const childMdParts = kramdownResults.slice(1).map(k => stripKramdownIAL(k));
+
+    const meta = await getDocumentMeta(section.rootDocId);
+    const lines = [];
+    lines.push('---');
+    lines.push('siyuan:');
+    lines.push(`  doc_id: ${section.rootDocId}`);
+    lines.push(`  section_id: ${section.headingBlockId}`);
+    lines.push(`  hpath: ${JSON.stringify(meta.hpath || '')}`);
+    lines.push('  view: readable');
+    lines.push('  scope: section');
+    lines.push(`  child_blocks: ${section.childBlockIds.length}`);
+    lines.push(`  exported_at: ${new Date().toISOString()}`);
+    lines.push('---');
+    lines.push('');
+    lines.push(headingMd);
+    lines.push('');
+    if (childMdParts.length > 0) {
+        lines.push(childMdParts.join('\n\n'));
+    } else {
+        lines.push('_该章节下没有子块_');
+    }
+
+    return lines.join('\n');
+}
+
+/**
  * 生成替换章节的执行计划
  * @param {string} headingBlockId - 标题块ID
  * @param {string} markdown - 替换内容
@@ -1734,6 +1869,33 @@ async function searchNotes(keyword, limit = 20, blockType = null) {
         LIMIT ${safeLimit}
     `;
 
+    return await executeSiyuanQuery(sql);
+}
+
+/**
+ * 在指定文档内搜索关键词
+ * @param {string} docId - 文档ID（root_id）
+ * @param {string} keyword - 搜索关键词
+ * @param {number} limit - 返回结果数量限制
+ * @returns {Promise<Array>} 查询结果
+ */
+async function searchInDocument(docId, keyword, limit = 20) {
+    assertNonEmptyString(docId, 'docId');
+    assertNonEmptyString(keyword, 'keyword');
+    const safeDocId = escapeSqlValue(docId);
+    const safeKeyword = escapeSqlValue(keyword);
+    const safeLimit = normalizeInt(limit, 20, 1, 200);
+    const sql = `
+        SELECT id, content, type, subtype, created, updated, parent_id
+        FROM blocks
+        WHERE root_id = '${safeDocId}'
+        AND (
+            instr(markdown, '${safeKeyword}') > 0
+            OR instr(content, '${safeKeyword}') > 0
+        )
+        ORDER BY updated DESC
+        LIMIT ${safeLimit}
+    `;
     return await executeSiyuanQuery(sql);
 }
 
@@ -2053,8 +2215,10 @@ const CLI_HANDLERS = createCliHandlers({
     stripCommandFlags,
     formatResults,
     searchNotes,
+    searchInDocument,
     searchNotesMarkdown,
     openDocument,
+    openSection,
     listNotebooks,
     getDocumentChildren,
     getDocumentTree,
@@ -2081,7 +2245,9 @@ const CLI_HANDLERS = createCliHandlers({
     getSystemVersion,
     createDocWithMd,
     renameDoc,
-    getPathByID
+    getPathByID,
+    updateBlock,
+    deleteBlock
 });
 
 /**
@@ -2145,9 +2311,12 @@ module.exports = {
     moveBlock,
     deleteBlock,
     appendMarkdownToBlock,
+    getSectionChildBlockIds,
+    openSection,
     planReplaceSection,
     replaceSection,
     searchNotes,
+    searchInDocument,
     searchNotesMarkdown,
     listDocuments,
     getDocumentHeadings,
@@ -2367,11 +2536,15 @@ function renderSearchResultsMarkdown({ query, results, limit }) {
 }
 
 /**
- * 读取文档Readable视图
+ * 读取文档Readable视图（支持自动截断）
  * @param {string} docId - 文档ID
+ * @param {Object} [options] - 选项
+ * @param {number} [options.limitChars] - 字符数限制
  * @returns {Promise<string>} Markdown视图
  */
-async function openDocumentReadableView(docId) {
+async function openDocumentReadableView(docId, options = {}) {
+    const limitChars = normalizeInt(options.limitChars, OPEN_DOC_CHAR_LIMIT, 1000, 1000000);
+
     const [meta, exported] = await Promise.all([
         getDocumentMeta(docId),
         exportMdContent(docId)
@@ -2384,6 +2557,36 @@ async function openDocumentReadableView(docId) {
     }
 
     const body = normalizeMarkdown(extractMarkdownFromExport(exported));
+    const totalChars = body.length;
+    const needsTruncation = !options.full && totalChars > limitChars;
+
+    let shownBody = body;
+    let shownChars = totalChars;
+    if (needsTruncation) {
+        // 按行截断；若首行超长则字符级兜底，保证 shownChars 不超过 limitChars
+        const bodyLines = body.split('\n');
+        const truncatedLines = [];
+        let charCount = 0;
+        for (const line of bodyLines) {
+            const separator = truncatedLines.length > 0 ? 1 : 0;
+            const projectedCount = charCount + separator + line.length;
+            if (projectedCount > limitChars) {
+                if (truncatedLines.length === 0) {
+                    truncatedLines.push(line.slice(0, limitChars));
+                    charCount = limitChars;
+                }
+                break;
+            }
+            truncatedLines.push(line);
+            charCount = projectedCount;
+        }
+        shownBody = truncatedLines.join('\n');
+        if (shownBody.length > limitChars) {
+            shownBody = shownBody.slice(0, limitChars);
+        }
+        shownChars = shownBody.length;
+    }
+
     const lines = [];
     lines.push('---');
     lines.push('siyuan:');
@@ -2391,10 +2594,36 @@ async function openDocumentReadableView(docId) {
     lines.push(`  hpath: ${JSON.stringify(hpath || '')}`);
     lines.push('  view: readable');
     lines.push('  source: exportMdContent');
+    if (needsTruncation) {
+        lines.push('  truncated: true');
+        lines.push(`  total_chars: ${totalChars}`);
+        lines.push(`  shown_chars: ${shownChars}`);
+    }
     lines.push(`  exported_at: ${new Date().toISOString()}`);
     lines.push('---');
     lines.push('');
-    lines.push(body || '_文档内容为空_');
+    lines.push(shownBody || '_文档内容为空_');
+
+    if (needsTruncation) {
+        // 追加标题大纲和导航提示
+        const headings = await getDocumentHeadings(docId);
+        lines.push('');
+        lines.push('---');
+        lines.push('');
+        lines.push('> **文档已截断**（已显示 ' + shownChars + ' / ' + totalChars + ' 字符）');
+        lines.push('>');
+        lines.push('> 使用 `open-section <标题块ID>` 读取具体章节，或 `search-in-doc ' + docId + ' <关键词>` 定位内容。');
+        if (headings.length > 0) {
+            lines.push('');
+            lines.push('## 文档标题大纲');
+            lines.push('');
+            for (const h of headings) {
+                const level = h.subtype || 'h1';
+                const indent = '  '.repeat(Math.max(0, parseInt(level.replace('h', ''), 10) - 1));
+                lines.push(`${indent}- ${h.content || '(无标题)'} \`${h.id}\``);
+            }
+        }
+    }
 
     return lines.join('\n');
 }
@@ -2528,11 +2757,17 @@ function renderPatchableMarkdown({ docId, meta, blocks }) {
 }
 
 /**
- * 读取文档Patchable视图
+ * 读取文档Patchable视图（支持分页）
  * @param {string} docId - 文档ID
+ * @param {Object} [options] - 选项
+ * @param {string} [options.cursor] - 起始块ID
+ * @param {number} [options.limitBlocks] - 每页块数限制
  * @returns {Promise<string>} patchable markdown
  */
-async function openDocumentPatchableView(docId) {
+async function openDocumentPatchableView(docId, options = {}) {
+    const limitBlocks = normalizeInt(options.limitBlocks, OPEN_DOC_BLOCK_PAGE_SIZE, 5, 10000);
+    const cursor = typeof options.cursor === 'string' ? options.cursor.trim() : '';
+
     const [meta, kramdown, docBlocks] = await Promise.all([
         getDocumentMeta(docId),
         getBlockKramdown(docId),
@@ -2551,22 +2786,85 @@ async function openDocumentPatchableView(docId) {
         }
     }
 
-    const blocks = parseBlocksFromKramdown(kramdown, parentIdMap);
-    return renderPatchableMarkdown({ docId, meta, blocks });
+    const allBlocks = parseBlocksFromKramdown(kramdown, parentIdMap);
+    const totalBlocks = allBlocks.length;
+
+    // 确定起始位置
+    let startIndex = 0;
+    if (cursor) {
+        const cursorIndex = allBlocks.findIndex(b => b.id === cursor);
+        if (cursorIndex === -1) {
+            throw new Error(`cursor 块ID未在文档中找到: ${cursor}`);
+        }
+        startIndex = cursorIndex;
+    }
+
+    const paginationActive = !options.full && (startIndex > 0 || totalBlocks > limitBlocks);
+    const endIndex = options.full ? totalBlocks : Math.min(startIndex + limitBlocks, totalBlocks);
+    const pageBlocks = options.full ? allBlocks : allBlocks.slice(startIndex, endIndex);
+    const hasMore = !options.full && endIndex < totalBlocks;
+    const nextCursor = hasMore ? allBlocks[endIndex].id : '';
+
+    if (options.full || !paginationActive) {
+        // 完整输出（小文档 / --full 模式）
+        return renderPatchableMarkdown({ docId, meta, blocks: allBlocks });
+    }
+
+    // 分页输出：标记 partial=true，apply-patch 将拒绝此类 PMF
+    const lines = [];
+    const updatedPart = meta.updated ? ` updated=${meta.updated}` : '';
+    const nextCursorPart = nextCursor ? ` next_cursor=${nextCursor}` : '';
+    lines.push(`<!-- @siyuan:doc id=${docId} hpath=${JSON.stringify(meta.hpath || '')} view=patchable pmf=v1 partial=true total_blocks=${totalBlocks} shown_blocks=${pageBlocks.length}${nextCursorPart}${updatedPart} -->`);
+    lines.push('');
+
+    for (const block of pageBlocks) {
+        const subTypePart = block.subType ? ` subType=${block.subType}` : '';
+        const parentPart = block.parentId ? ` parent=${block.parentId}` : '';
+        lines.push(`<!-- @siyuan:block id=${block.id} type=${block.type}${subTypePart}${parentPart} -->`);
+        lines.push(block.markdown);
+        lines.push('');
+    }
+
+    if (hasMore) {
+        lines.push('');
+        lines.push(`> **分页提示**：本页显示 ${pageBlocks.length} / ${totalBlocks} 块。`);
+        lines.push(`> 使用 \`open-doc ${docId} patchable --cursor ${nextCursor}\` 查看下一页。`);
+        lines.push('>');
+        lines.push('> **注意**：分页 PMF（partial=true）不能用于 apply-patch。如需编辑，请用 `open-section` 或 `update-block`。');
+
+        // 追加标题大纲
+        const headings = await getDocumentHeadings(docId);
+        if (headings.length > 0) {
+            lines.push('');
+            lines.push('## 文档标题大纲');
+            lines.push('');
+            for (const h of headings) {
+                const level = h.subtype || 'h1';
+                const indent = '  '.repeat(Math.max(0, parseInt(level.replace('h', ''), 10) - 1));
+                lines.push(`${indent}- ${h.content || '(无标题)'} \`${h.id}\``);
+            }
+        }
+    }
+
+    return lines.join('\n').trim();
 }
 
 /**
  * 按视图类型读取文档
  * @param {string} docId - 文档ID
  * @param {string} view - readable/patchable
+ * @param {Object} [options] - 选项
+ * @param {string} [options.cursor] - 起始块ID（仅 patchable）
+ * @param {number} [options.limitChars] - 字符数限制（仅 readable）
+ * @param {number} [options.limitBlocks] - 每页块数限制（仅 patchable）
  * @returns {Promise<string>} Markdown视图
  */
-async function openDocument(docId, view = 'readable') {
+async function openDocument(docId, view = 'readable', options = {}) {
     if (view === 'patchable') {
-        return await openDocumentPatchableView(docId);
+        return await openDocumentPatchableView(docId, options);
     }
 
-    return await openDocumentReadableView(docId);
+    return await openDocumentReadableView(docId, options);
 }
 
 /**
@@ -2768,6 +3066,14 @@ async function buildApplyPatchPlan(docId, patchableMarkdown) {
         throw new Error(`PMF 文档ID不匹配: expected=${docId}, actual=${parsedTarget.doc.id}`);
     }
 
+    // 拒绝分页/部分 PMF，避免误删未包含的块
+    if (parsedTarget.doc.partial === 'true') {
+        throw new Error(
+            'apply-patch 拒绝 partial PMF（分页或章节导出的 PMF 不包含完整文档块，' +
+            '缺失的块会被视为删除）。请改用 update-block 编辑单块，或 open-section + replace-section 编辑章节。'
+        );
+    }
+
     // PMF 快速版本检查：若 PMF 中包含 updated 字段，与当前文档对比
     const pmfUpdated = parsedTarget.doc.updated || '';
     if (pmfUpdated) {
@@ -2782,7 +3088,7 @@ async function buildApplyPatchPlan(docId, patchableMarkdown) {
         }
     }
 
-    const currentPmf = await openDocumentPatchableView(docId);
+    const currentPmf = await openDocumentPatchableView(docId, { full: true });
     const parsedCurrent = parsePatchableMarkdown(currentPmf);
 
     const currentBlocks = parsedCurrent.blocks;

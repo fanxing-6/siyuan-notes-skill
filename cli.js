@@ -7,7 +7,12 @@ const CLI_USAGE_TEXT = `
 命令:
   search <关键词> [数量] [类型] - 搜索包含关键词的笔记 (类型: p段落, h标题, l列表等)
   search-md <关键词> [数量] [类型] - 搜索并输出Markdown结果页
-  open-doc <文档ID> [视图]    - 打开文档Markdown视图 (视图: readable|patchable)
+  open-doc <文档ID> [视图] [--cursor <块ID>] [--limit-chars <N>] [--limit-blocks <N>] [--full]
+                           - 打开文档Markdown视图 (视图: readable|patchable, --full 跳过截断/分页)
+  open-section <标题块ID> [视图]
+                           - 读取标题下的章节内容 (视图: readable|patchable)
+  search-in-doc <文档ID> <关键词> [数量]
+                           - 在指定文档内搜索关键词
   notebooks                - 列出可用笔记本
   doc-children <笔记本ID> [路径]
                            - 列出指定路径下的子文档
@@ -26,6 +31,9 @@ const CLI_USAGE_TEXT = `
   replace-section <标题块ID> --clear
                            - 清空标题下全部子块
   apply-patch <文档ID>      - 从 stdin 读取 PMF 并应用补丁
+  update-block <块ID> <Markdown|--stdin>
+                           - 更新单个块内容（多行内容用 --stdin 从标准输入读取）
+  delete-block <块ID>       - 删除单个块
   docs [笔记本ID] [数量]     - 列出所有文档或指定笔记本的文档
   headings <文档ID> [级别]   - 查询文档标题 (级别: h1, h2等)
   blocks <文档ID> [类型]     - 查询文档子块
@@ -98,8 +106,10 @@ function createCliHandlers(deps) {
         stripCommandFlags,
         formatResults,
         searchNotes,
+        searchInDocument,
         searchNotesMarkdown,
         openDocument,
+        openSection,
         listNotebooks,
         getDocumentChildren,
         getDocumentTree,
@@ -126,7 +136,9 @@ function createCliHandlers(deps) {
         getSystemVersion,
         createDocWithMd,
         renameDoc,
-        getPathByID
+        getPathByID,
+        updateBlock,
+        deleteBlock
     } = deps;
 
     return {
@@ -163,18 +175,58 @@ function createCliHandlers(deps) {
         },
 
         'open-doc': async (args) => {
-            const docId = cliRequireArg(args, 1, '请提供文档ID');
+            const raw = args.slice(1);
+            // Extract --flag value pairs
+            const options = {};
+            const positional = [];
+            for (let i = 0; i < raw.length; i++) {
+                if (raw[i] === '--cursor' && i + 1 < raw.length) {
+                    options.cursor = raw[++i];
+                } else if (raw[i] === '--limit-chars' && i + 1 < raw.length) {
+                    options.limitChars = normalizeInt(raw[++i], 15000, 1000, 1000000);
+                } else if (raw[i] === '--limit-blocks' && i + 1 < raw.length) {
+                    options.limitBlocks = normalizeInt(raw[++i], 50, 5, 10000);
+                } else if (raw[i] === '--full') {
+                    options.full = true;
+                } else {
+                    positional.push(raw[i]);
+                }
+            }
+            const docId = positional[0];
             if (!docId) {
+                console.error('请提供文档ID');
                 return;
             }
-            const view = (args[2] || 'readable').toLowerCase();
+            const view = (positional[1] || 'readable').toLowerCase();
             if (view !== 'readable' && view !== 'patchable') {
                 console.error('视图参数仅支持 readable 或 patchable');
                 return;
             }
 
-            const markdownView = await openDocument(docId, view);
+            const markdownView = await openDocument(docId, view, options);
             console.log(markdownView);
+        },
+
+        'open-section': async (args) => {
+            const headingBlockId = cliRequireArg(args, 1, '请提供标题块ID');
+            if (!headingBlockId) return;
+            const view = (args[2] || 'readable').toLowerCase();
+            if (view !== 'readable' && view !== 'patchable') {
+                console.error('视图参数仅支持 readable 或 patchable');
+                return;
+            }
+            const result = await openSection(headingBlockId, view);
+            console.log(result);
+        },
+
+        'search-in-doc': async (args) => {
+            const docId = cliRequireArg(args, 1, '请提供文档ID');
+            if (!docId) return;
+            const keyword = cliRequireArg(args, 2, '请提供搜索关键词');
+            if (!keyword) return;
+            const limit = normalizeInt(args[3], 20, 1, 200);
+            const results = await searchInDocument(docId, keyword, limit);
+            console.log(formatResults(results));
         },
 
         notebooks: async () => {
@@ -474,6 +526,42 @@ function createCliHandlers(deps) {
 
             const result = await renameDoc(pathInfo.notebook, pathInfo.path, newTitle);
             console.log(JSON.stringify({ success: true, docId, newTitle }, null, 2));
+        },
+
+        'update-block': async (args) => {
+            rejectDeprecatedFlags(args);
+            const raw = args.slice(1);
+            const useStdin = raw.includes('--stdin');
+            const positional = raw.filter(a => a !== '--stdin');
+            const blockId = positional[0];
+
+            if (!blockId) {
+                console.error('请提供块ID');
+                return;
+            }
+
+            let markdown;
+            if (useStdin) {
+                markdown = String(await readStdinText() || '').trim();
+            } else {
+                markdown = positional.slice(1).join(' ').trim();
+            }
+
+            if (!markdown) {
+                console.error('请提供新的Markdown内容（参数传入或 --stdin 从标准输入读取）');
+                return;
+            }
+
+            const result = await updateBlock(blockId, markdown);
+            console.log(JSON.stringify(result, null, 2));
+        },
+
+        'delete-block': async (args) => {
+            rejectDeprecatedFlags(args);
+            const blockId = cliRequireArg(args, 1, '请提供要删除的块ID');
+            if (!blockId) return;
+            const result = await deleteBlock(blockId);
+            console.log(JSON.stringify(result, null, 2));
         },
 
         check: async () => {

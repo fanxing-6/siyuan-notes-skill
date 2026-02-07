@@ -11,9 +11,10 @@ allowed-tools:
 
 | 用户想要 | 正确做法 | 错误做法 |
 |---------|---------|---------|
-| 修改已有内容（改文字/表格数据） | `apply-patch`（仅 update） | |
-| 删除某些块 | `apply-patch`（仅 delete） | |
-| 重排已有块 | `apply-patch`（仅 reorder） | |
+| 修改单个块内容 | `update-block`（最高效） | ~~apply-patch 整个文档~~ |
+| 删除单个块 | `delete-block`（最高效） | ~~apply-patch 整个文档~~ |
+| 批量修改已有内容 | `apply-patch`（仅 update） | |
+| 批量删除/重排块 | `apply-patch`（仅 delete/reorder） | |
 | 添加新内容 | `append-block` 逐个追加 | ~~apply-patch 插入新块~~ |
 | 替换章节内容 | `replace-section` | ~~apply-patch 删除+插入~~ |
 | 重构文档（如拆表格） | `replace-section --clear` + `append-block` 逐步重建 | ~~apply-patch 删除旧块+插入新块~~ |
@@ -25,11 +26,15 @@ allowed-tools:
 ```
 用户想要…
 ├─ 查找/搜索内容 ──────→ search / search-md / tag / attr / bookmarks
-├─ 阅读文档 ──────────→ open-doc <ID> readable
+├─ 在文档内搜索 ──────→ search-in-doc <docID> <关键词>
+├─ 阅读文档 ──────────→ open-doc <ID> readable（超长文档自动截断，输出大纲导航）
+├─ 阅读章节 ──────────→ open-section <标题块ID> readable（精确读取一个标题的内容）
 ├─ 浏览最近动态 ──────→ recent / tasks / daily
 ├─ 了解文档结构 ──────→ docs / notebooks / headings / blocks / doc-tree / doc-tree-id / doc-children
 ├─ 查看引用关系 ──────→ backlinks / unreferenced
-├─ 修改已有内容 ──────→ open-doc patchable → 编辑内容 → apply-patch（仅 update/delete/reorder）
+├─ 修改单个块 ────────→ open-doc readable → update-block <块ID> <内容>（最高效）
+├─ 删除单个块 ────────→ open-doc readable → delete-block <块ID>（最高效）
+├─ 批量修改已有内容 ──→ open-doc patchable → 编辑内容 → apply-patch（仅 update/delete/reorder）
 ├─ 创建新文档 ────────→ create-doc（指定笔记本、标题、可选初始内容）
 ├─ 重命名文档 ────────→ rename-doc（只需文档 ID 和新标题）
 ├─ 添加新内容 ────────→ open-doc readable → append-block（逐个追加）
@@ -67,7 +72,9 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 |---------|-----------|-------------|
 | `search` | `<keyword> [limit] [type]` | 搜索笔记（type: p/h/l/c/d…） |
 | `search-md` | `<keyword> [limit] [type]` | 搜索并输出 Markdown 结果页 |
-| `open-doc` | `<docID> [readable\|patchable]` | 打开文档（默认 readable）。**副作用：标记已读** |
+| `open-doc` | `<docID> [readable\|patchable] [--full] [--cursor <块ID>] [--limit-chars <N>] [--limit-blocks <N>]` | 打开文档（默认 readable）。超长文档自动截断/分页，`--full` 跳过截断输出全量。**副作用：标记已读** |
+| `open-section` | `<标题块ID> [readable\|patchable]` | 读取标题下的章节内容。**副作用：标记文档已读** |
+| `search-in-doc` | `<docID> <关键词> [数量]` | 在指定文档内搜索匹配的块 |
 | `notebooks` | | 列出笔记本 |
 | `docs` | `[notebookID] [limit]` | 列出文档（含文档 ID，默认 200） |
 | `headings` | `<docID> [level]` | 文档标题（level 格式：`h1`/`h2`/…/`h6`，不是数字） |
@@ -93,9 +100,11 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 |---------|-----------|---------|
 | `create-doc` | `<notebookID> <标题> [markdown]` | 创建新文档（标题即文档名） |
 | `rename-doc` | `<docID> <新标题>` | 重命名文档 |
+| `update-block` | `<块ID> <markdown\|--stdin>` | 更新单个块内容（多行内容用 `--stdin`） |
+| `delete-block` | `<块ID>` | 删除单个块 |
 | `append-block` | `<parentID> <markdown>` | 添加新内容（parentID 可以是文档 ID 或标题块 ID） |
 | `replace-section` | `<headingID> <markdown\|--clear>` | 替换/清空章节（保留标题块本身，只替换子内容；新 markdown 不要重复标题） |
-| `apply-patch` | `<docID> < pmf` | **仅限**修改/删除/重排已有块 |
+| `apply-patch` | `<docID> < pmf` | **仅限**批量修改/删除/重排已有块（拒绝 partial PMF） |
 | `move-docs-by-id` | `<targetID> <sourceIDs>` | 移动文档（需先 open-doc 目标文档**和**所有来源文档） |
 | `subdoc-analyze-move` | `<targetID> <sourceIDs> [depth]` | 分析移动计划（只读） |
 
@@ -175,14 +184,46 @@ SIYUAN_ENABLE_WRITE=true node index.js create-doc "笔记本ID" "文档标题" $
 SIYUAN_ENABLE_WRITE=true node index.js rename-doc "文档ID" "新标题"
 ```
 
-### 6. 删除单个块（用 JS API）
+### 6. 修改/删除单个块
 
 ```bash
+# 修改单个块
 node index.js open-doc "文档ID" readable
-SIYUAN_ENABLE_WRITE=true node -e "
-const s = require('./index.js');
-s.deleteBlock('块ID').then(r => console.log(JSON.stringify(r)));
-"
+SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" "新内容"
+
+# 多行内容用 --stdin
+echo '## 新标题
+
+段落内容' | SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" --stdin
+
+# 删除单个块
+node index.js open-doc "文档ID" readable
+SIYUAN_ENABLE_WRITE=true node index.js delete-block "块ID"
+```
+
+### 7. 超长文档处理
+
+```bash
+# open-doc 超长文档自动截断/分页，输出大纲和导航提示
+node index.js open-doc "超长文档ID" readable
+# → 自动截断到 ~15K 字符，附带标题大纲
+
+# 读取特定章节（精确获取标题下内容）
+node index.js open-section "标题块ID" readable
+
+# 在文档内搜索关键词（无需读完全文）
+node index.js search-in-doc "文档ID" "关键词"
+
+# patchable 视图分页（默认每页 50 块）
+node index.js open-doc "文档ID" patchable
+# → 分页时 PMF header 含 partial=true next_cursor=xxx
+
+# 翻页
+node index.js open-doc "文档ID" patchable --cursor "下一块ID"
+
+# 需要完整 PMF（如整文 apply-patch）→ 用 --full 跳过分页
+node index.js open-doc "文档ID" patchable --full > /tmp/doc.pmf
+# ⚠️ 输出可能很大，注意上下文限制
 ```
 
 ## 错误恢复
@@ -194,6 +235,7 @@ s.deleteBlock('块ID').then(r => console.log(JSON.stringify(r)));
 | 写入围栏报错 | 未先 open-doc 或读标记过期 | `open-doc "docID" readable` 然后重试 |
 | 版本冲突报错 | 文档在 open-doc 后被其他端修改 | `open-doc "docID" readable` 重新读取最新版本然后重试 |
 | PMF 版本冲突 | PMF 导出后文档被修改 | `open-doc "docID" patchable > /tmp/doc.pmf` 重新导出后再编辑 |
+| partial PMF 被拒绝 | 分页/章节导出的 PMF 不完整 | 改用 `update-block` 编辑单块，或 `open-section` + `replace-section` 编辑章节 |
 | 只读模式报错 | 未设置 `SIYUAN_ENABLE_WRITE=true` | 在命令前加 `SIYUAN_ENABLE_WRITE=true` |
 | 文档标题为"未命名文档" | `createDocWithMd` 的 path 参数决定标题 | 用 `create-doc` CLI 命令（自动设置标题）或 `rename-doc` 修正 |
 | 连接失败 | 思源未运行/端口/Token 错误 | `node index.js check` 验证 |
@@ -202,8 +244,9 @@ s.deleteBlock('块ID').then(r => console.log(JSON.stringify(r)));
 ## Output Guidance
 
 - 读取命令返回格式化文本 → 直接展示给用户
-- `open-doc readable` 返回干净 Markdown → 适合阅读和总结
-- `open-doc patchable` 返回 PMF 格式 → 仅用于编辑后 apply-patch
+- `open-doc readable` 返回干净 Markdown → 适合阅读和总结（超长文档自动截断到 ~15K 字符，附带标题大纲）
+- `open-doc patchable` 返回 PMF 格式 → 仅用于编辑后 apply-patch（超长文档自动分页，分页 PMF 含 `partial=true`，**不可用于 apply-patch**）
+- `open-section` 返回单章节内容 → 适合精确阅读/编辑特定章节
 - 写入命令返回 JSON（通常很冗长） → 只提取关键信息（如新文档 ID、成功/失败）展示给用户，不要原样输出全部 JSON
 
 ## Supporting Files

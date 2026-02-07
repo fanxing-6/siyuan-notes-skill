@@ -45,7 +45,9 @@ node index.js check
 |------|------|
 | `search <关键词> [数量] [类型]` | 全文搜索 |
 | `search-md <关键词> [数量] [类型]` | 搜索并输出 Markdown 结果页 |
-| `open-doc <文档ID> [readable\|patchable]` | 打开文档（同时标记已读，记录版本快照） |
+| `open-doc <文档ID> [readable\|patchable] [--cursor <块ID>] [--limit-chars <N>] [--limit-blocks <N>] [--full]` | 打开文档（超长文档自动截断/分页，`--full` 跳过） |
+| `open-section <标题块ID> [readable\|patchable]` | 读取标题下的章节内容 |
+| `search-in-doc <文档ID> <关键词> [数量]` | 在指定文档内搜索 |
 | `notebooks` | 列出笔记本 |
 | `docs [笔记本ID] [数量]` | 列出文档 |
 | `headings <文档ID> [级别]` | 文档标题（级别：h1-h6） |
@@ -75,7 +77,9 @@ node index.js check
 | `rename-doc <文档ID> <新标题>` | 重命名文档 |
 | `append-block <父块ID> <markdown>` | 追加内容 |
 | `replace-section <标题块ID> <markdown\|--clear>` | 替换/清空章节 |
-| `apply-patch <文档ID> < pmf` | 修改/删除/重排已有块（从 stdin 读取 PMF） |
+| `update-block <块ID> <markdown\|--stdin>` | 更新单个块内容 |
+| `delete-block <块ID>` | 删除单个块 |
+| `apply-patch <文档ID> < pmf` | 批量修改/删除/重排已有块（从 stdin 读取 PMF） |
 | `move-docs-by-id <目标ID> <来源ID列表>` | 移动文档 |
 | `subdoc-analyze-move <目标ID> <来源ID列表> [深度]` | 分析移动计划（只读） |
 

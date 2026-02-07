@@ -39,19 +39,71 @@ node index.js search-md <关键词> [数量] [块类型]
 ### open-doc — 打开文档
 
 ```bash
-node index.js open-doc <文档ID> [readable|patchable]
+node index.js open-doc <文档ID> [readable|patchable] [--full] [--cursor <块ID>] [--limit-chars <N>] [--limit-blocks <N>]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
 |------|------|--------|------|
 | 文档ID | 是 | | 文档块 ID |
 | 视图 | 否 | readable | `readable`=干净 Markdown；`patchable`=PMF 格式 |
+| --full | 否 | | 跳过截断/分页，输出完整文档（可能很大，注意上下文限制） |
+| --cursor | 否 | | patchable 分页起始块 ID |
+| --limit-chars | 否 | 15000 | readable 视图字符截断阈值（1000-1000000） |
+| --limit-blocks | 否 | 50 | patchable 视图每页块数（5-10000） |
 
 **返回**：
-- `readable`：YAML 头 + Markdown 正文，适合阅读和总结
-- `patchable`：带块 ID 注释的 PMF 格式，用于编辑
+- `readable`：YAML 头 + Markdown 正文，适合阅读和总结。超长文档自动截断到 `--limit-chars` 字符（按行截断），附带标题大纲和导航提示
+- `patchable`：带块 ID 注释的 PMF 格式，用于编辑。超长文档自动分页，PMF header 含 `partial=true next_cursor=<块ID>`
+
+**超长文档自动截断行为**：
+- readable 视图：文本超过阈值时，YAML header 追加 `truncated: true`、`total_chars`、`shown_chars`，正文附带标题大纲和章节导航提示
+- patchable 视图：块数超过阈值时，PMF header 追加 `partial=true total_blocks=N shown_blocks=M next_cursor=<下一块ID>`
+- **partial PMF 不可用于 apply-patch**（会被自动拒绝，防止误删未包含的块）
 
 **副作用**：标记文档为"已读"并记录文档版本快照（满足写入前置条件，写入前会校验版本是否一致）
+
+**环境变量**：
+- `SIYUAN_OPEN_DOC_CHAR_LIMIT`：覆盖默认字符截断阈值（默认 15000）
+- `SIYUAN_OPEN_DOC_BLOCK_PAGE_SIZE`：覆盖默认每页块数（默认 50）
+
+---
+
+### open-section — 读取章节
+
+```bash
+node index.js open-section <标题块ID> [readable|patchable]
+```
+
+| 参数 | 必需 | 默认值 | 说明 |
+|------|------|--------|------|
+| 标题块ID | 是 | | 必须是标题块（type=h） |
+| 视图 | 否 | readable | `readable`=干净 Markdown；`patchable`=PMF 格式 |
+
+**返回**：
+- `readable`：YAML header（含 scope: section 信息）+ 该标题下所有子块的 Markdown
+- `patchable`：PMF 格式（header 含 `partial=true section=<标题块ID>`），仅包含该章节的块
+
+**副作用**：标记文档为"已读"
+
+> **注意**：patchable 视图的 PMF 标记为 `partial=true`，不可用于 apply-patch。如需编辑章节，使用 `replace-section` 或 `update-block`。
+
+---
+
+### search-in-doc — 文档内搜索
+
+```bash
+node index.js search-in-doc <文档ID> <关键词> [数量]
+```
+
+| 参数 | 必需 | 默认值 | 说明 |
+|------|------|--------|------|
+| 文档ID | 是 | | 要搜索的文档 ID |
+| 关键词 | 是 | | 搜索关键词 |
+| 数量 | 否 | 20 | 返回数量（1-200） |
+
+**返回**：格式化文本，每行含块 ID、内容、类型、时间
+
+> 适合在超长文档中快速定位内容，无需读取整个文档。
 
 ---
 
@@ -408,6 +460,62 @@ node index.js apply-patch <文档ID> < patch.pmf
 > **重要限制：仅用于修改已有块内容、删除块、重排块。不要用来插入新块（会导致 "invalid ID argument" 且可能丢失数据）。** 详见 [docs/pmf-spec.md](pmf-spec.md)。
 >
 > **PMF 必须完整**：提交的 PMF 文件必须包含文档的**所有**块。缺失的块会被视为删除操作。正确做法是先 `open-doc patchable > /tmp/doc.pmf` 导出完整 PMF，只修改目标块的文本内容，然后提交完整文件。**不要只写目标块的 PMF**，否则其他所有块都会被删除。
+>
+> **partial PMF 被拒绝**：分页导出或 `open-section` patchable 导出的 PMF 含 `partial=true` 标记，apply-patch 会自动拒绝，防止未包含的块被误删。此时应改用 `update-block` 编辑单块，或 `replace-section` 编辑章节。
+
+---
+
+### update-block — 更新单个块
+
+```bash
+node index.js update-block <块ID> <Markdown内容>
+node index.js update-block <块ID> --stdin
+```
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| 块ID | 是 | 要更新的块 ID |
+| Markdown | 是（除非 --stdin） | 新的块内容 |
+| --stdin | 否 | 从标准输入读取 Markdown 内容（适合多行/代码块） |
+
+**返回**：JSON
+
+**常见用法：**
+```bash
+# 简单修改
+node index.js open-doc "文档ID" readable
+SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" "修改后的内容"
+
+# 多行内容通过 stdin
+echo '## 新标题
+
+- 列表项1
+- 列表项2' | SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" --stdin
+```
+
+> **优势**：无需导出/提交完整 PMF，直接修改单个块，零上下文开销。
+
+---
+
+### delete-block — 删除单个块
+
+```bash
+node index.js delete-block <块ID>
+```
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| 块ID | 是 | 要删除的块 ID |
+
+**返回**：JSON
+
+**常见用法：**
+```bash
+node index.js open-doc "文档ID" readable
+SIYUAN_ENABLE_WRITE=true node index.js delete-block "块ID"
+```
+
+> **优势**：无需 apply-patch，直接删除单个块。
 
 ---
 
@@ -450,6 +558,9 @@ CLI 无法满足时可直接调用导出的 API。
 
 ### 删除单个块
 
+> **推荐使用 CLI**：`SIYUAN_ENABLE_WRITE=true node index.js delete-block "块ID"`
+
+JS API 方式（兜底）：
 ```bash
 node index.js open-doc "文档ID" readable
 SIYUAN_ENABLE_WRITE=true node -e "
@@ -460,6 +571,9 @@ s.deleteBlock('要删除的块ID').then(r => console.log(JSON.stringify(r)));
 
 ### 更新单个块内容
 
+> **推荐使用 CLI**：`SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" "新内容"`（多行用 `--stdin`）
+
+JS API 方式（兜底）：
 ```bash
 node index.js open-doc "文档ID" readable
 SIYUAN_ENABLE_WRITE=true node -e "
