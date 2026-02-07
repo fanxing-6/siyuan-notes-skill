@@ -62,9 +62,9 @@ const CLI_USAGE_TEXT = `
   node index.js doc-tree-id "20211231120000-d0rzbmm" 5
   node index.js subdoc-analyze-move "20211231120000-d0rzbmm" "20211231121000-aaa111,20211231122000-bbb222" 6
   SIYUAN_ENABLE_WRITE=true node index.js move-docs-by-id "20211231120000-d0rzbmm" "20211231121000-aaa111,20211231122000-bbb222"
-  SIYUAN_ENABLE_WRITE=true node index.js apply-patch "20211231120000-d0rzbmm" < patch.pmf
+  SIYUAN_ENABLE_WRITE=true node index.js apply-patch "20211231120000-d0rzbmm" < /tmp/doc.pmf
   SIYUAN_ENABLE_WRITE=true node index.js append-block "20211231120000-d0rzbmm" "- [ ] 新任务"
-  SIYUAN_ENABLE_WRITE=true node index.js replace-section "20211231120000-d0rzbmm" "- 更新内容"
+  SIYUAN_ENABLE_WRITE=true node index.js replace-section "20211231120001-h1abcde" "- 更新内容"
   node index.js docs
   node index.js docs 100
   node index.js headings "20211231120000-d0rzbmm" h2

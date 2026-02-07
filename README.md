@@ -25,7 +25,7 @@
   - 拒绝 `partial=true` 的 PMF（防止误删未包含块）。
 - 写入命令：
   - 需要 `SIYUAN_ENABLE_WRITE=true`。
-  - 需要先 `open-doc`（或 `open-section`）建立读后写上下文。
+  - 通常需要先 `open-doc`（或 `open-section`）建立读后写上下文（`create-doc` / `rename-doc` 例外）。
 
 ## 安装
 
@@ -145,7 +145,7 @@ SIYUAN_ENABLE_WRITE=true node index.js apply-patch "docID" < /tmp/doc.pmf
 写入前有两道检查：
 
 1. 写开关：`SIYUAN_ENABLE_WRITE=true`
-2. 读后写围栏：必须先读文档
+2. 读后写围栏：必须先 `open-doc` 或 `open-section` 读取上下文（`create-doc` / `rename-doc` 例外）
 
 写入时还会做版本检查：
 
@@ -154,7 +154,7 @@ SIYUAN_ENABLE_WRITE=true node index.js apply-patch "docID" < /tmp/doc.pmf
 
 ## 常见错误与处理
 
-- `读后写围栏`：先 `open-doc` 再重试。
+- `读后写围栏`：先 `open-doc`（或 `open-section`）再重试。
 - `版本冲突`：重新读取最新文档后再写。
 - `partial PMF 被拒绝`：改用 `--full` 或改用 `update-block/replace-section`。
 - `PMF 文档 ID 不匹配`：检查 `apply-patch` 的 docID 和 PMF header。

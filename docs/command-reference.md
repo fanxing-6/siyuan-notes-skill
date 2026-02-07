@@ -334,8 +334,8 @@ node index.js version
 
 **所有写入命令的通用前置条件：**
 1. `.env` 中 `SIYUAN_ENABLE_WRITE=true`（或命令行前缀 `SIYUAN_ENABLE_WRITE=true`）
-2. 必须先用 `open-doc` 读取过目标文档
-3. 文档在 `open-doc` 之后不能被其他端修改过（**核心保护**：基于 `updated` 时间戳的乐观锁版本检查）
+2. 必须先用 `open-doc` 或 `open-section` 读取过目标文档/章节
+3. 文档在读取后不能被其他端修改过（**核心保护**：基于 `updated` 时间戳的乐观锁版本检查）
 
 > 读标记超过 3600 秒会自动过期，但这只是缓存清理机制；真正防止脏写的是版本检查。
 
@@ -449,7 +449,7 @@ node index.js replace-section <标题块ID> --clear
 ### apply-patch — 应用 PMF 补丁
 
 ```bash
-node index.js apply-patch <文档ID> < patch.pmf
+node index.js apply-patch <文档ID> < /tmp/doc.pmf
 ```
 
 | 参数 | 必需 | 说明 |
@@ -461,7 +461,7 @@ node index.js apply-patch <文档ID> < patch.pmf
 
 > **支持范围：update / delete / reorder / insert。** 详见 [docs/pmf-spec.md](pmf-spec.md)。
 >
-> **PMF 必须完整**：提交的 PMF 文件必须包含文档的**所有**块。缺失的块会被视为删除操作。正确做法是先 `open-doc patchable > /tmp/doc.pmf` 导出完整 PMF，只修改目标块的文本内容，然后提交完整文件。**不要只写目标块的 PMF**，否则其他所有块都会被删除。
+> **PMF 必须完整**：提交的 PMF 文件必须包含文档的**所有**块。缺失的块会被视为删除操作。正确做法是先 `open-doc patchable --full > /tmp/doc.pmf` 导出完整 PMF，只修改目标块的文本内容，然后提交完整文件。**不要只写目标块的 PMF**，否则其他所有块都会被删除。
 >
 > **partial PMF 被拒绝**：分页导出或 `open-section` patchable 导出的 PMF 含 `partial=true` 标记，apply-patch 会自动拒绝，防止未包含的块被误删。此时应改用 `update-block` 编辑单块，或 `replace-section` 编辑章节。
 
@@ -626,7 +626,7 @@ s.renameDoc('笔记本ID', '/文档存储路径.sy', '新标题').then(r => cons
 
 ### 不可用的函数（未导出，不要调用）
 
-- `markDocumentRead` — 用 `open-doc` 命令代替
+- `markDocumentRead` — 用 `open-doc` 或 `open-section` 命令代替
 - `loadReadGuardCache` / `saveReadGuardCache` — 内部函数
 
 ---
@@ -644,13 +644,13 @@ s.renameDoc('笔记本ID', '/文档存储路径.sy', '新标题').then(r => cons
 
 ### 写入围栏报错
 
-**原因**：没有先 open-doc，或读标记已过期
+**原因**：没有先 `open-doc` / `open-section`，或读标记已过期
 
-**恢复**：执行 `node index.js open-doc "文档ID" readable` 然后重试
+**恢复**：执行 `node index.js open-doc "文档ID" readable`（或针对目标章节执行 `open-section`）然后重试
 
 ### 版本冲突报错
 
-**原因**：文档在 open-doc 之后被其他端（浏览器/手机/同步）修改过
+**原因**：文档在 `open-doc` / `open-section` 之后被其他端（浏览器/手机/同步）修改过
 
 **错误信息**：`文档 XXX 自上次读取后已被修改（读取时版本: ..., 当前版本: ...）`
 
@@ -658,7 +658,7 @@ s.renameDoc('笔记本ID', '/文档存储路径.sy', '新标题').then(r => cons
 
 **PMF 版本冲突**：如果 apply-patch 报 `PMF 版本冲突`，需要重新导出 PMF：
 ```bash
-node index.js open-doc "文档ID" patchable > /tmp/doc.pmf
+node index.js open-doc "文档ID" patchable --full > /tmp/doc.pmf
 # 重新编辑 PMF 后再 apply-patch
 ```
 

@@ -70,7 +70,7 @@ apply-patch 支持插入新块。建议使用唯一临时 ID（如 `tmp-001`）�
 
 ```bash
 # 1. 导出
-node index.js open-doc "docID" patchable > /tmp/doc.pmf
+node index.js open-doc "docID" patchable --full > /tmp/doc.pmf
 
 # 2. 编辑 /tmp/doc.pmf —— 只改 markdown 内容，保留所有块 ID 注释不变
 
@@ -136,7 +136,7 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "## 详情"
 | `PMF 文档ID不匹配` | PMF 中的 doc id 与目标文档不一致 | 检查文档 ID |
 | `重复 block id` | PMF 中有重复的块 ID | 确保每个块 ID 唯一 |
 | 文档被清空 | 提交了不完整 PMF，缺失块被当作删除 | 仅基于 `open-doc ... patchable --full` 导出的完整 PMF 编辑 |
-| 写入围栏报错 | 没有先 open-doc | 先执行 `open-doc "docID" readable` |
+| 写入围栏报错 | 没有先 open-doc / open-section | 先执行 `open-doc "docID" readable`（或针对章节用 `open-section`） |
 
 ---
 

@@ -45,20 +45,22 @@ allowed-tools:
 
 ## Write Safety Protocol
 
-**写入前必须完成这 2 步，缺一不可：**
+**写入前通常需要完成这 2 步（`create-doc` / `rename-doc` 例外）：**
 
 ```bash
-# 步骤 1：读取文档（标记为"已读"，同时记录文档版本快照）
+# 步骤 1：读取文档或章节（标记为"已读"，同时记录文档版本快照）
 node index.js open-doc "docID" readable
+# 或：node index.js open-section "headingBlockID" readable
 
 # 步骤 2：环境变量启用写入
 SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 ```
 
-- 只有 `open-doc` 计为"已读"；`headings`/`blocks`/`doc-tree` 等不算
-- **核心保护：版本检查（乐观锁）**——写入前对比文档 `updated` 时间戳，若文档在 open-doc 后被其他端修改过则拒绝写入
+- `open-doc` 和 `open-section` 计为"已读"；`headings`/`blocks`/`doc-tree` 等不算
+- **核心保护：版本检查（乐观锁）**——写入前对比文档 `updated` 时间戳，若文档在读取后被其他端修改过则拒绝写入
 - 连续写入安全：每次写入成功后自动刷新版本号，`open-doc → write → write → write` 不会误报冲突
 - 读标记超过 3600 秒自动过期（仅作为缓存清理，版本检查才是真正的安全机制）
+- 例外：`create-doc` 与 `rename-doc` 不要求先 `open-doc`
 
 ## Core Commands Quick Reference
 
@@ -102,7 +104,7 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 | `delete-block` | `<块ID>` | 删除单个块 |
 | `append-block` | `<parentID> <markdown>` | 添加新内容（parentID 可以是文档 ID 或标题块 ID） |
 | `replace-section` | `<headingID> <markdown\|--clear>` | 替换/清空章节（保留标题块本身，只替换子内容；新 markdown 不要重复标题） |
-| `apply-patch` | `<docID> < pmf` | **仅限**批量修改/删除/重排已有块（拒绝 partial PMF） |
+| `apply-patch` | `<docID> < /path/to/doc.pmf` | **仅限**批量修改/删除/重排已有块（拒绝 partial PMF） |
 | `move-docs-by-id` | `<targetID> <sourceIDs>` | 移动文档（需先 open-doc 目标文档**和**所有来源文档） |
 | `subdoc-analyze-move` | `<targetID> <sourceIDs> [depth]` | 分析移动计划（只读） |
 
@@ -118,8 +120,8 @@ node index.js open-doc "找到的文档ID" readable
 ### 2. 修改已有块内容（apply-patch 安全用法）
 
 ```bash
-# 导出 PMF
-node index.js open-doc "docID" patchable > /tmp/doc.pmf
+# 导出完整 PMF（必须 --full；默认 patchable 在长文档会分页并标记 partial=true）
+node index.js open-doc "docID" patchable --full > /tmp/doc.pmf
 
 # 编辑 /tmp/doc.pmf：只改 markdown 内容，保留所有块 ID 注释不变
 # ⚠️ 关键：PMF 必须包含文档的 **所有** 块！缺失的块会被视为删除！
@@ -230,9 +232,9 @@ node index.js open-doc "文档ID" patchable --full > /tmp/doc.pmf
 |------|------|---------|
 | `invalid ID argument` | 块 ID 不存在或格式错误 | 重新导出 `open-doc ... patchable --full`，校验 block ID 后再提交 |
 | 文档被清空 | 提交了不完整 PMF，缺失块被当作删除 | 用 `open-doc ... patchable --full` 重新导出完整 PMF 后恢复 |
-| 写入围栏报错 | 未先 open-doc 或读标记过期 | `open-doc "docID" readable` 然后重试 |
-| 版本冲突报错 | 文档在 open-doc 后被其他端修改 | `open-doc "docID" readable` 重新读取最新版本然后重试 |
-| PMF 版本冲突 | PMF 导出后文档被修改 | `open-doc "docID" patchable > /tmp/doc.pmf` 重新导出后再编辑 |
+| 写入围栏报错 | 未先 open-doc/open-section 或读标记过期 | `open-doc "docID" readable`（或 `open-section`）然后重试 |
+| 版本冲突报错 | 文档在读取后被其他端修改 | `open-doc "docID" readable` 重新读取最新版本然后重试 |
+| PMF 版本冲突 | PMF 导出后文档被修改 | `open-doc "docID" patchable --full > /tmp/doc.pmf` 重新导出后再编辑 |
 | partial PMF 被拒绝 | 分页/章节导出的 PMF 不完整 | 改用 `update-block` 编辑单块，或 `open-section` + `replace-section` 编辑章节 |
 | 只读模式报错 | 未设置 `SIYUAN_ENABLE_WRITE=true` | 在命令前加 `SIYUAN_ENABLE_WRITE=true` |
 | 文档标题为"未命名文档" | `createDocWithMd` 的 path 参数决定标题 | 用 `create-doc` CLI 命令（自动设置标题）或 `rename-doc` 修正 |
