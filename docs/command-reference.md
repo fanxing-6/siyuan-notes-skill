@@ -158,7 +158,9 @@ node index.js blocks <文档ID> [块类型]
 | 文档ID | 是 | | |
 | 块类型 | 否 | 全部 | `p`/`h`/`l`/`t`/`c` 等 |
 
-**返回**：格式化文本，每行含块 ID（如 `[20260206204442-j76ycfo]`），可用于 append-block 的 parentID
+**返回**：格式化文本，每行含块 ID（如 `[20260206204442-j76ycfo]`），可用于 append-block / insert-block 的锚点。
+
+> 若块 markdown 含图片语法（如 `![alt](...)`），摘要会标记 `[img]`，方便 grep 定位图片块。
 
 ---
 
@@ -427,6 +429,39 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "父块ID" "- [ ] 待办事�
 
 ---
 
+### insert-block — 在指定位置插入
+
+```bash
+node index.js insert-block --before <块ID> <Markdown内容>
+node index.js insert-block --after <块ID> <Markdown内容>
+node index.js insert-block --parent <块ID> <Markdown内容>
+```
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| --before 块ID | 三选一 | 在该块之前插入（映射到 nextID） |
+| --after 块ID | 三选一 | 在该块之后插入（映射到 previousID） |
+| --parent 块ID | 三选一 | 作为目标父块的末尾子块插入（映射到 parentID） |
+| Markdown | 是 | 要插入的内容（引号包裹） |
+
+**返回**：JSON
+
+**常见用法：**
+```bash
+# 在目标块前插入（例如给文档开头加导读）
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "目标块ID" "## 导读"
+
+# 在目标块后插入
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID" "补充说明"
+
+# 作为父块末尾子块插入
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --parent "父块ID" "- [ ] 新任务"
+```
+
+> `insert-block` 同样受写入围栏和版本检查保护：先 `open-doc` / `open-section`，再写入。
+
+---
+
 ### replace-section — 替换章节
 
 ```bash
@@ -583,6 +618,21 @@ const s = require('./index.js');
 s.updateBlock('块ID', '新的 Markdown 内容').then(r => console.log(JSON.stringify(r)));
 "
 ```
+
+### 在指定位置插入（JS API）
+
+> **推荐使用 CLI**：`SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "块ID" "内容"`
+
+JS API 方式（兜底）：
+```bash
+node index.js open-doc "文档ID" readable
+SIYUAN_ENABLE_WRITE=true node -e "
+const s = require('./index.js');
+s.insertBlock('插入内容', { nextID: '目标块ID' }).then(r => console.log(JSON.stringify(r)));
+"
+```
+
+> 锚点参数三选一：`{ nextID }`（前插）/ `{ previousID }`（后插）/ `{ parentID }`（父块下插入）。
 
 ### 执行 SQL 查询
 

@@ -16,6 +16,7 @@ allowed-tools:
 | 批量修改已有内容 | `apply-patch`（update/delete/reorder/insert） | |
 | 批量删除/重排块 | `apply-patch`（delete/reorder） | |
 | 添加新内容 | `append-block`（简单稳妥）或 `apply-patch` insert（批量场景） | |
+| 在指定位置插入新块 | `insert-block --before/--after`（首选）或 `apply-patch` insert | |
 | 替换章节内容 | `replace-section` | ~~apply-patch 删除+插入~~ |
 | 重构文档（如拆表格） | `replace-section --clear` + `append-block` 逐步重建 | ~~apply-patch 删除旧块+插入新块~~ |
 
@@ -36,6 +37,7 @@ allowed-tools:
 ├─ 创建新文档 ────────→ create-doc（指定笔记本、标题、可选初始内容）
 ├─ 重命名文档 ────────→ rename-doc（只需文档 ID 和新标题）
 ├─ 添加新内容 ────────→ open-doc readable → append-block（逐个追加）
+├─ 指定位置插入 ──────→ open-doc readable → insert-block --before/--after（按锚点插入）
 ├─ 替换章节 ──────────→ open-doc patchable → replace-section
 ├─ 重构文档结构 ──────→ open-doc readable → replace-section --clear → append-block 逐步重建
 ├─ 组织文档层级 ──────→ subdoc-analyze-move → move-docs-by-id
@@ -103,6 +105,7 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 | `update-block` | `<块ID> <markdown\|--stdin>` | 更新单个块内容（多行内容用 `--stdin`） |
 | `delete-block` | `<块ID>` | 删除单个块 |
 | `append-block` | `<parentID> <markdown>` | 添加新内容（parentID 可以是文档 ID 或标题块 ID） |
+| `insert-block` | `<--before 块ID\|--after 块ID\|--parent 块ID> <markdown>` | 在指定锚点插入内容（前/后/父块下） |
 | `replace-section` | `<headingID> <markdown\|--clear>` | 替换/清空章节（保留标题块本身，只替换子内容；新 markdown 不要重复标题） |
 | `apply-patch` | `<docID> < /path/to/doc.pmf` | **仅限**批量修改/删除/重排已有块（拒绝 partial PMF） |
 | `move-docs-by-id` | `<targetID> <sourceIDs>` | 移动文档（需先 open-doc 目标文档**和**所有来源文档） |
@@ -139,6 +142,14 @@ node index.js open-doc "docID" readable                    # 先读
 SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "## 新标题"
 SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "段落内容"
 SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "- [ ] 任务"
+```
+
+### 3.5 在指定位置插入内容
+
+```bash
+node index.js open-doc "docID" readable
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "目标块ID" "插入在该块之前"
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID" "插入在该块之后"
 ```
 
 ### 4. 重构文档（如拆分表格为多个）

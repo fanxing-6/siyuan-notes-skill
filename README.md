@@ -69,6 +69,7 @@ node index.js version
 | 删一个块 | `delete-block` | 不需要整文 PMF |
 | 改一个章节 | `replace-section` | 只影响标题下子块 |
 | 追加内容 | `append-block` | 简单稳定 |
+| 指定位置插入 | `insert-block` | 支持在目标块前/后插入 |
 | 批量改/删/重排 | `apply-patch` | 必须基于完整 PMF |
 | 超长文档定位 | `search-in-doc` + `open-section` | 不读全文 |
 
@@ -95,6 +96,7 @@ node index.js version
 - `create-doc <notebookID> <title> [markdown]`
 - `rename-doc <docID> <newTitle>`
 - `append-block <parentID> <markdown>`
+- `insert-block <--before <blockID>|--after <blockID>|--parent <blockID>> <markdown>`
 - `replace-section <headingID> <markdown|--clear>`
 - `update-block <blockID> <markdown|--stdin>`
 - `delete-block <blockID>`
@@ -118,6 +120,14 @@ SIYUAN_ENABLE_WRITE=true node index.js update-block "blockID" "新内容"
 ```bash
 node index.js open-doc "docID" readable
 SIYUAN_ENABLE_WRITE=true node index.js replace-section "headingBlockID" $'段落A\n\n段落B'
+```
+
+### 2.5) 在指定位置插入
+
+```bash
+node index.js open-doc "docID" readable
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "targetBlockID" "插入在该块之前"
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "targetBlockID" "插入在该块之后"
 ```
 
 ### 3) 批量改（PMF）

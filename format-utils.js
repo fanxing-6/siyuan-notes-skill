@@ -102,7 +102,16 @@ function formatResults(results, options = {}) {
             parts.push(`${type}:`);
         }
 
-        const content = item.content || '(无内容)';
+        const markdown = typeof item.markdown === 'string' ? item.markdown : '';
+        const hasImage = /!\[[^\]]*\]\([^\n)]+\)/.test(markdown)
+            || /!\[[^\]]*\]\[[^\]]+\]/.test(markdown)
+            || /<img\s+[^>]*src\s*=/.test(markdown.toLowerCase());
+
+        let content = item.content || '(无内容)';
+        if (hasImage) {
+            content = content === '(无内容)' ? '[img]' : `[img] ${content}`;
+        }
+
         if (content.length > contentLength) {
             parts.push(content.substring(0, contentLength) + '...');
         } else {

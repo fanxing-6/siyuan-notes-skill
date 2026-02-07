@@ -537,10 +537,18 @@ async function refreshDocumentVersion(docId) {
         return;
     }
 
+    loadReadGuardCache();
+    pruneExpiredReadMarks();
+
     const meta = readGuardCache.docs[docId];
     if (!meta) {
         return;
     }
+
+    const writeStamp = Date.now();
+    meta.lastWriteAt = writeStamp;
+    meta.ts = writeStamp;
+    saveReadGuardCache();
 
     try {
         const baselineUpdated = meta.updatedAt || '';
@@ -569,11 +577,16 @@ async function refreshDocumentVersion(docId) {
         }
 
         meta.updatedAt = candidateUpdated || baselineUpdated;
-        meta.lastWriteAt = Date.now();
+        meta.lastWriteAt = writeStamp;
         meta.ts = Date.now();
         saveReadGuardCache();
-    } catch (_) {
-        // 刷新失败不阻塞写入流程
+    } catch (error) {
+        meta.lastWriteAt = writeStamp;
+        meta.ts = Date.now();
+        saveReadGuardCache();
+        if (DEBUG_MODE) {
+            console.log(`⚠️  refreshDocumentVersion(${docId}) 失败: ${error.message}`);
+        }
     }
 }
 
@@ -1939,6 +1952,7 @@ const CLI_HANDLERS = createCliHandlers({
     analyzeSubdocMovePlan,
     reorganizeSubdocsByID,
     appendMarkdownToBlock,
+    insertBlock,
     replaceSection,
     applyPatchToDocument,
     listDocuments,
@@ -2017,6 +2031,7 @@ module.exports = {
     analyzeSubdocMovePlan,
     deleteBlock,
     appendMarkdownToBlock,
+    insertBlock,
     openSection,
     replaceSection,
     searchNotes,

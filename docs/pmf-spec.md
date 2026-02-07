@@ -78,7 +78,7 @@ node index.js open-doc "docID" patchable --full > /tmp/doc.pmf
 SIYUAN_ENABLE_WRITE=true node index.js apply-patch "docID" < /tmp/doc.pmf
 ```
 
-### 策略 2：需要增加新内容（用 append-block）
+### 策略 2：需要增加新内容（文末/父块末尾追加，用 append-block）
 
 适用于：添加段落、标题、表格等新块
 
@@ -92,6 +92,21 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "新段落内容"
 
 # 3. 或追加到特定块下
 SIYUAN_ENABLE_WRITE=true node index.js append-block "某个块ID" "子内容"
+```
+
+### 策略 2.5：需要在指定块前/后插入（用 insert-block）
+
+适用于：在文档开头插入导读、在两个现有块之间插入新段落
+
+```bash
+# 1. 先读取文档（满足读围栏）
+node index.js open-doc "docID" readable
+
+# 2. 在目标块前插入
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "目标块ID" "## 导读"
+
+# 3. 或在目标块后插入
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID" "补充说明"
 ```
 
 ### 策略 3：需要替换某个章节（用 replace-section）
@@ -124,7 +139,7 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "|列1|列2|
 SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "## 详情"
 ```
 
-**注意：** 每次 append-block 都是独立的 API 调用，不需要重新 open-doc（每次写入后版本自动刷新，支持连续写入）。
+**注意：** 每次 append-block / insert-block 都是独立的 API 调用，不需要重新 open-doc（每次写入后版本自动刷新，支持连续写入）。
 
 ---
 

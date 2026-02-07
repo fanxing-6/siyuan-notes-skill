@@ -25,9 +25,11 @@ const CLI_USAGE_TEXT = `
   move-docs-by-id <目标ID> <来源ID列表>
                            - 重新组织子文档，来源ID可逗号或空格分隔
   append-block <父块ID> <Markdown>
-                           - 向父块追加内容
+                            - 向父块追加内容
+  insert-block <--before 块ID|--after 块ID|--parent 块ID> <Markdown>
+                            - 在指定锚点插入内容（前/后/父块下）
   replace-section <标题块ID> <Markdown>
-                           - 替换标题下全部子块
+                            - 替换标题下全部子块
   replace-section <标题块ID> --clear
                            - 清空标题下全部子块
   apply-patch <文档ID>      - 从 stdin 读取 PMF 并应用补丁
@@ -64,6 +66,8 @@ const CLI_USAGE_TEXT = `
   SIYUAN_ENABLE_WRITE=true node index.js move-docs-by-id "20211231120000-d0rzbmm" "20211231121000-aaa111,20211231122000-bbb222"
   SIYUAN_ENABLE_WRITE=true node index.js apply-patch "20211231120000-d0rzbmm" < /tmp/doc.pmf
   SIYUAN_ENABLE_WRITE=true node index.js append-block "20211231120000-d0rzbmm" "- [ ] 新任务"
+  SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "20211231120001-h1abcde" "## 新增导读"
+  SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "20211231120001-h1abcde" "插入到该块后"
   SIYUAN_ENABLE_WRITE=true node index.js replace-section "20211231120001-h1abcde" "- 更新内容"
   node index.js docs
   node index.js docs 100
@@ -123,6 +127,7 @@ function createCliHandlers(deps) {
         analyzeSubdocMovePlan,
         reorganizeSubdocsByID,
         appendMarkdownToBlock,
+        insertBlock,
         replaceSection,
         applyPatchToDocument,
         listDocuments,
@@ -340,6 +345,56 @@ function createCliHandlers(deps) {
             }
 
             const result = await appendMarkdownToBlock(parentBlockId, markdown);
+            console.log(JSON.stringify(result, null, 2));
+        },
+
+        'insert-block': async (args) => {
+            rejectDeprecatedFlags(args);
+            const raw = args.slice(1);
+            const anchors = {
+                parentID: '',
+                previousID: '',
+                nextID: ''
+            };
+            const positional = [];
+
+            for (let i = 0; i < raw.length; i++) {
+                const token = raw[i];
+                if (token === '--before' || token === '--after' || token === '--parent') {
+                    if (i + 1 >= raw.length) {
+                        cliError(`${token} 需要提供块ID`);
+                        return;
+                    }
+                    const anchorId = String(raw[++i] || '').trim();
+                    if (!anchorId) {
+                        cliError(`${token} 需要提供块ID`);
+                        return;
+                    }
+                    if (token === '--before') {
+                        anchors.nextID = anchorId;
+                    } else if (token === '--after') {
+                        anchors.previousID = anchorId;
+                    } else {
+                        anchors.parentID = anchorId;
+                    }
+                } else {
+                    positional.push(token);
+                }
+            }
+
+            const anchorCount = [anchors.parentID, anchors.previousID, anchors.nextID].filter(Boolean).length;
+            if (anchorCount !== 1) {
+                cliError('请且仅提供一个锚点：--before <块ID> 或 --after <块ID> 或 --parent <块ID>');
+                return;
+            }
+
+            const markdown = positional.join(' ').trim();
+            if (!markdown) {
+                cliError('请提供要插入的Markdown内容');
+                return;
+            }
+
+            const result = await insertBlock(markdown, anchors);
             console.log(JSON.stringify(result, null, 2));
         },
 
