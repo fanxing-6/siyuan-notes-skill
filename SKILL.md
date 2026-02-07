@@ -5,6 +5,49 @@ allowed-tools:
   - Bash
 ---
 
+## 开始前必做：版本检查（必须先做）
+
+每次处理用户请求前，先做一次本地版本检查，并与 GitHub 最新发布版本对比。
+
+### 1) 读取本地版本信息
+
+```bash
+LOCAL_VER=$(node -p "require('./package.json').version")
+LOCAL_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+LOCAL_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "no-tag")
+```
+
+### 2) 获取 GitHub 最新版本
+
+优先用 GitHub Release；失败则回退到 tags：
+
+```bash
+LATEST_TAG=$(gh release view --repo fanxing-6/siyuan-notes-skill --json tagName -q .tagName 2>/dev/null || true)
+
+if [ -z "$LATEST_TAG" ]; then
+  LATEST_TAG=$(git ls-remote --tags --refs https://github.com/fanxing-6/siyuan-notes-skill.git "refs/tags/v*" \
+    | awk -F/ '{print $3}' \
+    | sort -V \
+    | tail -n 1)
+fi
+
+LATEST_VER=${LATEST_TAG#v}
+```
+
+### 3) 比较与行为规则（强制）
+
+- 若远程版本获取失败：**不要阻塞任务**，直接继续执行用户指令。
+- 若检测到 `LOCAL_VER` 不是最新：先提示用户一条简短信息，然后**继续执行用户指令**。
+- 禁止把“不是最新版本”当成拒绝执行的理由。
+- 同一会话只提示一次版本落后，避免重复打扰。
+
+提示模板（版本落后时）：
+
+```text
+⚠️ 当前 skill 版本不是最新（local: <LOCAL_VER>, latest: <LATEST_VER>, commit: <LOCAL_SHA>）。
+我会继续执行你当前的指令；但是给用户提示，建议尽快更新到最新版本以获得最佳体验。
+```
+
 ## 编辑策略选择（最重要）
 
 根据用户意图选择正确的编辑方式，**选错会导致数据丢失**：
@@ -63,6 +106,12 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 - 连续写入安全：每次写入成功后自动刷新版本号，`open-doc → write → write → write` 不会误报冲突
 - 读标记超过 3600 秒自动过期（仅作为缓存清理，版本检查才是真正的安全机制）
 - 例外：`create-doc` 与 `rename-doc` 不要求先 `open-doc`
+
+## 发布规范（维护者）
+
+- 每次发布都要更新 `package.json` 的 `version`
+- 发布时创建匹配标签：`vX.Y.Z`（例如版本 `1.3.0` 对应 tag `v1.3.0`）
+- README 安装说明应区分稳定版（tag）和最新版（主分支）
 
 ## Core Commands Quick Reference
 
