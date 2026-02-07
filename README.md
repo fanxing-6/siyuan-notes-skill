@@ -30,7 +30,9 @@
 ## 安装
 
 ```bash
-cd ~/.claude/skills
+# 根据情况选择路径
+# cd ~/.claude/skills
+# cd ~/.codex/skills
 git clone https://github.com/fanxing-6/siyuan-notes-skill.git siyuan-notes
 cd siyuan-notes
 npm install
