@@ -5,6 +5,8 @@
 
 仓库地址：`https://github.com/fanxing-6/siyuan-notes-skill`
 
+建议配合gpt、claude最新模型食用
+
 ## 这个项目要解决什么
 
 - 文档很长时，不能把全文直接塞进上下文。
