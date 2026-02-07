@@ -29,6 +29,8 @@
   - 需要 `SIYUAN_ENABLE_WRITE=true`。
   - 通常需要先 `open-doc`（或 `open-section`）建立读后写上下文（`create-doc` / `rename-doc` 例外）。
 
+**以下步骤可以直接粘贴给agent执行**
+
 ## 安装
 
 ```bash
