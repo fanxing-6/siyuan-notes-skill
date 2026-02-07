@@ -189,26 +189,6 @@ function hasClearFlag(args) {
     return args.includes('--clear');
 }
 
-/** 已废弃的标志，若出现则抛出迁移提示 */
-const DEPRECATED_FLAGS = new Set(['--execute', '--dry-run', '--plan', '--apply']);
-
-/**
- * 检查并拒绝已废弃的 CLI 标志
- * @param {Array<string>} args - 命令参数
- * @throws {Error} 如果发现已废弃标志
- */
-function rejectDeprecatedFlags(args) {
-    for (const arg of args) {
-        if (DEPRECATED_FLAGS.has(arg)) {
-            throw new Error(
-                `已废弃标志 "${arg}" 已在此版本移除。` +
-                `写入命令现在直接执行，只需设置 SIYUAN_ENABLE_WRITE=true。` +
-                `请移除 "${arg}" 后重试。`
-            );
-        }
-    }
-}
-
 /**
  * 去除命令中的标志位参数
  * @param {Array<string>} args - 命令参数
@@ -1936,7 +1916,6 @@ const CLI_HANDLERS = createCliHandlers({
     readStdinText,
     normalizeInt,
     hasClearFlag,
-    rejectDeprecatedFlags,
     stripCommandFlags,
     formatResults,
     searchNotes,

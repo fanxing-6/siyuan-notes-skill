@@ -111,7 +111,6 @@ function createCliHandlers(deps) {
         readStdinText,
         normalizeInt,
         hasClearFlag,
-        rejectDeprecatedFlags,
         stripCommandFlags,
         formatResults,
         searchNotes,
@@ -307,7 +306,6 @@ function createCliHandlers(deps) {
         },
 
         'move-docs-by-id': async (args) => {
-            rejectDeprecatedFlags(args);
             const positional = args.slice(1);
             const toID = positional[0];
             const fromRaw = positional.slice(1).join(' ').trim();
@@ -329,7 +327,6 @@ function createCliHandlers(deps) {
         },
 
         'append-block': async (args) => {
-            rejectDeprecatedFlags(args);
             const positional = args.slice(1);
             const parentBlockId = positional[0];
             const markdown = positional.slice(1).join(' ').trim();
@@ -349,7 +346,6 @@ function createCliHandlers(deps) {
         },
 
         'insert-block': async (args) => {
-            rejectDeprecatedFlags(args);
             const raw = args.slice(1);
             const anchors = {
                 parentID: '',
@@ -399,7 +395,6 @@ function createCliHandlers(deps) {
         },
 
         'replace-section': async (args) => {
-            rejectDeprecatedFlags(args);
             const raw = args.slice(1);
             const clearMode = hasClearFlag(raw);
             const positional = stripCommandFlags(raw);
@@ -421,7 +416,6 @@ function createCliHandlers(deps) {
         },
 
         'apply-patch': async (args) => {
-            rejectDeprecatedFlags(args);
             const positional = args.slice(1);
             const docId = positional[0];
 
@@ -552,7 +546,6 @@ function createCliHandlers(deps) {
         },
 
         'create-doc': async (args) => {
-            rejectDeprecatedFlags(args);
             const positional = args.slice(1);
             const notebook = positional[0];
             const title = positional[1];
@@ -573,7 +566,6 @@ function createCliHandlers(deps) {
         },
 
         'rename-doc': async (args) => {
-            rejectDeprecatedFlags(args);
             const positional = args.slice(1);
             const docId = positional[0];
             const newTitle = positional.slice(1).join(' ').trim();
@@ -599,7 +591,6 @@ function createCliHandlers(deps) {
         },
 
         'update-block': async (args) => {
-            rejectDeprecatedFlags(args);
             const raw = args.slice(1);
             const useStdin = raw.includes('--stdin');
             const positional = raw.filter(a => a !== '--stdin');
@@ -627,7 +618,6 @@ function createCliHandlers(deps) {
         },
 
         'delete-block': async (args) => {
-            rejectDeprecatedFlags(args);
             const blockId = cliRequireArg(args, 1, '请提供要删除的块ID');
             if (!blockId) return;
             const result = await deleteBlock(blockId);
