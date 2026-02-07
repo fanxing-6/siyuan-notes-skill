@@ -1,8 +1,31 @@
 # siyuan-notes-skill
 
-Claude Code Skill，通过思源笔记 API 实现笔记的搜索、阅读、编辑和组织。
+给 Codex/Claude 用的思源笔记技能。  
+重点是两件事：读写可控、批量编辑可恢复。
 
-**GitHub 仓库**: https://github.com/fanxing-6/siyuan-notes-skill
+仓库地址：`https://github.com/fanxing-6/siyuan-notes-skill`
+
+## 这个项目要解决什么
+
+- 文档很长时，不能把全文直接塞进上下文。
+- 批量编辑时，不能因为输入不完整把文档误删。
+- 多端同时编辑时，要能检测冲突，不做盲写。
+- CLI 失败要返回非 0，方便脚本和 CI 判断。
+
+## 默认行为（先看这个）
+
+- `open-doc readable`：
+  - 小文档：返回全文。
+  - 大文档：自动截断，并附带标题大纲。
+- `open-doc patchable`：
+  - 小文档：返回完整 PMF。
+  - 大文档：自动分页，header 含 `partial=true` 和 `next_cursor`。
+- `apply-patch`：
+  - 只接受完整 PMF。
+  - 拒绝 `partial=true` 的 PMF（防止误删未包含块）。
+- 写入命令：
+  - 需要 `SIYUAN_ENABLE_WRITE=true`。
+  - 需要先 `open-doc`（或 `open-section`）建立读后写上下文。
 
 ## 安装
 
@@ -15,93 +38,149 @@ npm install
 
 ## 配置
 
-创建 `.env` 文件：
+在项目目录创建 `.env`：
 
 ```env
 SIYUAN_HOST=localhost
 SIYUAN_PORT=6806
-SIYUAN_API_TOKEN=你的API_TOKEN
+SIYUAN_API_TOKEN=your_api_token
 SIYUAN_ENABLE_WRITE=false
 SIYUAN_REQUIRE_READ_BEFORE_WRITE=true
 SIYUAN_READ_GUARD_TTL_SECONDS=3600
 SIYUAN_LIST_DOCUMENTS_LIMIT=200
+SIYUAN_OPEN_DOC_CHAR_LIMIT=15000
+SIYUAN_OPEN_DOC_BLOCK_PAGE_SIZE=50
 ```
 
-API Token 获取：思源笔记 → 设置 → 关于。
-
-验证连接：
+连通性检查：
 
 ```bash
 node index.js check
+node index.js version
 ```
 
-## 命令概览
+## 编辑方式选择
 
-所有命令：`node index.js <command> [args]`
+| 需求 | 推荐命令 | 说明 |
+|---|---|---|
+| 改一个块 | `update-block` | 最小改动，风险最低 |
+| 删一个块 | `delete-block` | 不需要整文 PMF |
+| 改一个章节 | `replace-section` | 只影响标题下子块 |
+| 追加内容 | `append-block` | 简单稳定 |
+| 批量改/删/重排 | `apply-patch` | 必须基于完整 PMF |
+| 超长文档定位 | `search-in-doc` + `open-section` | 不读全文 |
 
-### 读取
+一句话：**小改动用小工具，整文重排才用 PMF。**
 
-| 命令 | 用途 |
-|------|------|
-| `search <关键词> [数量] [类型]` | 全文搜索 |
-| `search-md <关键词> [数量] [类型]` | 搜索并输出 Markdown 结果页 |
-| `open-doc <文档ID> [readable\|patchable] [--cursor <块ID>] [--limit-chars <N>] [--limit-blocks <N>] [--full]` | 打开文档（超长文档自动截断/分页，`--full` 跳过） |
-| `open-section <标题块ID> [readable\|patchable]` | 读取标题下的章节内容 |
-| `search-in-doc <文档ID> <关键词> [数量]` | 在指定文档内搜索 |
-| `notebooks` | 列出笔记本 |
-| `docs [笔记本ID] [数量]` | 列出文档 |
-| `headings <文档ID> [级别]` | 文档标题（级别：h1-h6） |
-| `blocks <文档ID> [类型]` | 文档子块（含块 ID） |
-| `doc-children <笔记本ID> [路径]` | 子文档列表 |
-| `doc-tree <笔记本ID> [路径] [深度]` | 子文档树 |
-| `doc-tree-id <文档ID> [深度]` | 以文档 ID 展示子文档树 |
-| `tag <标签名>` | 按标签搜索 |
-| `backlinks <块ID>` | 反向链接 |
-| `tasks "[状态]" [天数]` | 任务查询（推荐给状态加引号） |
-| `daily <开始> <结束>` | Daily Note（YYYYMMDD） |
-| `attr <属性名> [值]` | 按属性查询 |
-| `bookmarks [名称]` | 书签 |
-| `random <文档ID>` | 随机标题 |
-| `recent [天数] [类型]` | 最近修改 |
-| `unreferenced <笔记本ID>` | 未被引用的文档 |
-| `check` | 连接检查 |
-| `version` | 内核版本 |
+## 常用命令
 
-### 写入
+所有命令格式：`node index.js <command> [args]`
 
-写入前必须满足：`SIYUAN_ENABLE_WRITE=true` + 先 `open-doc` 读取目标文档。
+读取：
 
-| 命令 | 用途 |
-|------|------|
-| `create-doc <笔记本ID> <标题> [markdown]` | 创建新文档 |
-| `rename-doc <文档ID> <新标题>` | 重命名文档 |
-| `append-block <父块ID> <markdown>` | 追加内容 |
-| `replace-section <标题块ID> <markdown\|--clear>` | 替换/清空章节 |
-| `update-block <块ID> <markdown\|--stdin>` | 更新单个块内容 |
-| `delete-block <块ID>` | 删除单个块 |
-| `apply-patch <文档ID> < pmf` | 批量修改/删除/重排已有块（从 stdin 读取 PMF） |
-| `move-docs-by-id <目标ID> <来源ID列表>` | 移动文档 |
-| `subdoc-analyze-move <目标ID> <来源ID列表> [深度]` | 分析移动计划（只读） |
+- `open-doc <docID> [readable|patchable] [--full] [--cursor <blockID>] [--limit-chars <N>] [--limit-blocks <N>]`
+- `open-section <headingBlockID> [readable|patchable]`
+- `search-in-doc <docID> <keyword> [limit]`
+- `search <keyword> [limit] [type]`
+- `search-md <keyword> [limit] [type]`
+- `notebooks`
+- `docs [notebookID] [limit]`
+- `headings <docID> [h1|h2|...|h6]`
+- `blocks <docID> [type]`
+
+写入：
+
+- `create-doc <notebookID> <title> [markdown]`
+- `rename-doc <docID> <newTitle>`
+- `append-block <parentID> <markdown>`
+- `replace-section <headingID> <markdown|--clear>`
+- `update-block <blockID> <markdown|--stdin>`
+- `delete-block <blockID>`
+- `apply-patch <docID> < /tmp/doc.pmf`
+- `subdoc-analyze-move <targetID> <sourceIDs> [depth]`
+- `move-docs-by-id <targetID> <sourceIDs>`
+
+完整参数与返回格式见 `docs/command-reference.md`。
+
+## 典型流程
+
+### 1) 改单个块（首选）
+
+```bash
+node index.js open-doc "docID" readable
+SIYUAN_ENABLE_WRITE=true node index.js update-block "blockID" "新内容"
+```
+
+### 2) 改章节
+
+```bash
+node index.js open-doc "docID" readable
+SIYUAN_ENABLE_WRITE=true node index.js replace-section "headingBlockID" $'段落A\n\n段落B'
+```
+
+### 3) 批量改（PMF）
+
+```bash
+node index.js open-doc "docID" patchable --full > /tmp/doc.pmf
+# 编辑 /tmp/doc.pmf（保留块注释，修改内容）
+SIYUAN_ENABLE_WRITE=true node index.js apply-patch "docID" < /tmp/doc.pmf
+```
+
+## 超长文档建议
+
+优先顺序：
+
+1. `open-doc readable` 看摘要和大纲。
+2. `search-in-doc` 找关键词位置。
+3. `open-section` 读目标章节。
+4. 仅在确实需要整文编辑时使用 `patchable --full`。
+
+注意：
+
+- 分页 PMF（`partial=true`）不能用于 `apply-patch`。
+- 如果需要翻页，使用 `--cursor <next_cursor>`。
 
 ## 写入安全机制
 
-1. **环境变量开关**：`SIYUAN_ENABLE_WRITE=true` 才允许写入
-2. **读后写围栏**：写入前必须先 `open-doc` 读取目标文档
-3. **乐观锁**：写入前对比文档 `updated` 时间戳，被其他端修改过则拒绝写入
-4. **连续写入安全**：每次写入成功后自动刷新版本号，无需重新 open-doc
+写入前有两道检查：
+
+1. 写开关：`SIYUAN_ENABLE_WRITE=true`
+2. 读后写围栏：必须先读文档
+
+写入时还会做版本检查：
+
+- 比较文档 `updated` 时间戳。
+- 如果读之后被其他端修改，当前写入会被拒绝。
+
+## 常见错误与处理
+
+- `读后写围栏`：先 `open-doc` 再重试。
+- `版本冲突`：重新读取最新文档后再写。
+- `partial PMF 被拒绝`：改用 `--full` 或改用 `update-block/replace-section`。
+- `PMF 文档 ID 不匹配`：检查 `apply-patch` 的 docID 和 PMF header。
+
+## 项目结构
+
+- `index.js`：核心流程与写入保护
+- `cli.js`：命令解析
+- `lib/query-services.js`：搜索/查询相关逻辑
+- `lib/pmf-utils.js`：PMF 解析与渲染
+- `format-utils.js`：输出格式化
+
+## 测试
 
 ```bash
-# 典型写入流程
-node index.js open-doc "docID" readable
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "新内容"
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "更多内容"
+npm test
+SIYUAN_ENABLE_WRITE=true node edge-tests.js
+SIYUAN_ENABLE_WRITE=true node complex-tests.js
 ```
 
-## 详细文档
+## 相关文档
 
-- [docs/command-reference.md](docs/command-reference.md) — 命令详细参数、返回格式、示例
-- [docs/pmf-spec.md](docs/pmf-spec.md) — PMF 格式规范、编辑策略
-- [docs/sql-reference.md](docs/sql-reference.md) — SQL 表结构、查询示例
+- `SKILL.md`：给 Agent 的操作策略
+- `docs/command-reference.md`：命令参数和示例
+- `docs/pmf-spec.md`：PMF 规则和边界
+- `docs/sql-reference.md`：SQL 参考
 
 ## License
 
