@@ -54,6 +54,7 @@ const CLI_USAGE_TEXT = `
                            - 重命名文档
   check                    - 检查连接状态
   version                  - 获取思源内核版本
+  version-check            - 检查 skill 版本是否最新
 
 示例:
   node index.js search "人工智能" 10 p
@@ -77,6 +78,7 @@ const CLI_USAGE_TEXT = `
   node index.js attr "custom-priority" "high"
   SIYUAN_ENABLE_WRITE=true node index.js create-doc "20210817205410-2kvfpfn" "我的新文档" "初始内容"
   SIYUAN_ENABLE_WRITE=true node index.js rename-doc "20211231120000-d0rzbmm" "新标题"
+  node index.js version-check
 
 写入提示:
   默认只读。若要写入，请在环境变量中设置 SIYUAN_ENABLE_WRITE=true。
@@ -143,6 +145,7 @@ function createCliHandlers(deps) {
         getUnreferencedDocuments,
         checkConnection,
         getSystemVersion,
+        checkSkillVersion,
         createDocWithMd,
         renameDoc,
         getPathByID,
@@ -635,6 +638,21 @@ function createCliHandlers(deps) {
         version: async () => {
             const version = await getSystemVersion();
             console.log(version ? `思源内核版本: ${version}` : '未获取到版本号');
+        },
+
+        'version-check': async () => {
+            const result = await checkSkillVersion();
+            const localInfo = `local: ${result.localVersion}, commit: ${result.localSha}`;
+            if (result.status === 'latest') {
+                console.log(`✅ 当前 skill 版本已是最新（${localInfo}, latest: ${result.latestVersion || 'unknown'}）。`);
+                return;
+            }
+            if (result.status === 'outdated') {
+                console.log(`⚠️ 当前 skill 版本不是最新（local: ${result.localVersion}, latest: ${result.latestVersion}, commit: ${result.localSha}）。`);
+                console.log('建议尽快更新到最新版本以获得最佳体验。');
+                return;
+            }
+            console.log(`⚠️ 无法获取远程版本，已跳过检查（${localInfo}）。`);
         }
     };
 }

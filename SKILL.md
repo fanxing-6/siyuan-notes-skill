@@ -5,48 +5,16 @@ allowed-tools:
   - Bash
 ---
 
-## 开始前必做：版本检查（必须先做）
+## 开始前（可选）：版本检查
 
-每次处理用户请求前，先做一次本地版本检查，并与 GitHub 最新发布版本对比。
-
-### 1) 读取本地版本信息
+如需确认是否为最新版本，请运行：
 
 ```bash
-LOCAL_VER=$(node -p "require('./package.json').version")
-LOCAL_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-LOCAL_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "no-tag")
+node index.js version-check
 ```
 
-### 2) 获取 GitHub 最新版本
-
-优先用 GitHub Release；失败则回退到 tags：
-
-```bash
-LATEST_TAG=$(gh release view --repo fanxing-6/siyuan-notes-skill --json tagName -q .tagName 2>/dev/null || true)
-
-if [ -z "$LATEST_TAG" ]; then
-  LATEST_TAG=$(git ls-remote --tags --refs https://github.com/fanxing-6/siyuan-notes-skill.git "refs/tags/v*" \
-    | awk -F/ '{print $3}' \
-    | sort -V \
-    | tail -n 1)
-fi
-
-LATEST_VER=${LATEST_TAG#v}
-```
-
-### 3) 比较与行为规则（强制）
-
-- 若远程版本获取失败：**不要阻塞任务**，直接继续执行用户指令。
-- 若检测到 `LOCAL_VER` 不是最新：先提示用户一条简短信息，然后**继续执行用户指令**。
-- 禁止把“不是最新版本”当成拒绝执行的理由。
-- 同一会话只提示一次版本落后，避免重复打扰。
-
-提示模板（版本落后时）：
-
-```text
-⚠️ 当前 skill 版本不是最新（local: <LOCAL_VER>, latest: <LATEST_VER>, commit: <LOCAL_SHA>）。
-我会继续执行你当前的指令；但是给用户提示，建议尽快更新到最新版本以获得最佳体验。
-```
+- 若远程版本获取失败：不会阻塞任务
+- 若检测到版本落后：会提示但不阻塞
 
 ## 编辑策略选择（最重要）
 

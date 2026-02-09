@@ -3,6 +3,7 @@
 所有命令：`node index.js <command> [args]`
 
 运行前提：cwd 必须是 skill 目录（即 `index.js` 所在目录）。
+若上层进程已注入 `SIYUAN_*` 环境变量，则无需创建 `.env`；若环境变量不可继承，再按提示创建 `.env`。不要在输出中打印完整 token。
 
 ---
 
@@ -329,6 +330,16 @@ node index.js version
 ```
 
 **返回**：版本号文本
+
+---
+
+### version-check — skill 版本检查
+
+```bash
+node index.js version-check
+```
+
+**返回**：提示是否为最新版本；若无法获取远程版本则提示已跳过
 
 ---
 
