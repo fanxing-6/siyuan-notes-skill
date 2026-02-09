@@ -1,6 +1,6 @@
 {
   "name": "siyuan-notes-skill",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "思源笔记查询工具，支持SQL查询、文档搜索、笔记本管理等功能",
   "main": "index.js",
   "scripts": {
