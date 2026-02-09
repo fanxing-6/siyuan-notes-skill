@@ -24,17 +24,17 @@ const CLI_USAGE_TEXT = `
                            - 分析复杂子文档重组计划（不执行）
   move-docs-by-id <目标ID> <来源ID列表>
                            - 重新组织子文档，来源ID可逗号或空格分隔
-  append-block <父块ID> <Markdown>
-                            - 向父块追加内容
-  insert-block <--before 块ID|--after 块ID|--parent 块ID> <Markdown>
-                            - 在指定锚点插入内容（前/后/父块下）
-  replace-section <标题块ID> <Markdown>
-                            - 替换标题下全部子块
+  append-block <父块ID>
+                             - 向父块追加内容（Markdown 仅支持 stdin）
+  insert-block <--before 块ID|--after 块ID|--parent 块ID>
+                             - 在指定锚点插入内容（前/后/父块下，Markdown 仅支持 stdin）
+  replace-section <标题块ID>
+                             - 替换标题下全部子块（Markdown 仅支持 stdin）
   replace-section <标题块ID> --clear
                            - 清空标题下全部子块
   apply-patch <文档ID>      - 从 stdin 读取 PMF 并应用补丁
-  update-block <块ID> <Markdown|--stdin>
-                           - 更新单个块内容（多行内容用 --stdin 从标准输入读取）
+  update-block <块ID>
+                            - 更新单个块内容（Markdown 仅支持 stdin）
   delete-block <块ID>       - 删除单个块
   docs [笔记本ID] [数量]     - 列出所有文档或指定笔记本的文档
   headings <文档ID> [级别]   - 查询文档标题 (级别: h1, h2等)
@@ -48,8 +48,8 @@ const CLI_USAGE_TEXT = `
   random <文档ID>           - 随机漫游文档标题
   recent [天数] [类型]       - 查询最近修改的块
   unreferenced <笔记本ID>    - 查询未被引用的文档
-  create-doc <笔记本ID> <标题> [Markdown]
-                           - 创建新文档
+  create-doc <笔记本ID> <标题>
+                            - 创建新文档（初始 Markdown 仅支持 stdin，可省略）
   rename-doc <文档ID> <新标题>
                            - 重命名文档
   check                    - 检查连接状态
@@ -66,17 +66,27 @@ const CLI_USAGE_TEXT = `
   node index.js subdoc-analyze-move "20211231120000-d0rzbmm" "20211231121000-aaa111,20211231122000-bbb222" 6
   SIYUAN_ENABLE_WRITE=true node index.js move-docs-by-id "20211231120000-d0rzbmm" "20211231121000-aaa111,20211231122000-bbb222"
   SIYUAN_ENABLE_WRITE=true node index.js apply-patch "20211231120000-d0rzbmm" < /tmp/doc.pmf
-  SIYUAN_ENABLE_WRITE=true node index.js append-block "20211231120000-d0rzbmm" "- [ ] 新任务"
-  SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "20211231120001-h1abcde" "## 新增导读"
-  SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "20211231120001-h1abcde" "插入到该块后"
-  SIYUAN_ENABLE_WRITE=true node index.js replace-section "20211231120001-h1abcde" "- 更新内容"
+  SIYUAN_ENABLE_WRITE=true node index.js append-block "20211231120000-d0rzbmm" <<'EOF'
+- [ ] 新任务
+EOF
+  SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "20211231120001-h1abcde" <<'EOF'
+## 新增导读
+EOF
+  SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "20211231120001-h1abcde" <<'EOF'
+插入到该块后
+EOF
+  SIYUAN_ENABLE_WRITE=true node index.js replace-section "20211231120001-h1abcde" <<'EOF'
+- 更新内容
+EOF
   node index.js docs
   node index.js docs 100
   node index.js headings "20211231120000-d0rzbmm" h2
   node index.js tasks "[ ]" 7
   node index.js daily 20231010 20231013
   node index.js attr "custom-priority" "high"
-  SIYUAN_ENABLE_WRITE=true node index.js create-doc "20210817205410-2kvfpfn" "我的新文档" "初始内容"
+  SIYUAN_ENABLE_WRITE=true node index.js create-doc "20210817205410-2kvfpfn" "我的新文档" <<'EOF'
+初始内容
+EOF
   SIYUAN_ENABLE_WRITE=true node index.js rename-doc "20211231120000-d0rzbmm" "新标题"
   node index.js version-check
 
@@ -105,6 +115,15 @@ function cliRequireArg(args, index, message) {
 async function cliPrintFormattedResults(loader, formatResults) {
     const results = await loader();
     console.log(formatResults(results));
+}
+
+async function readRequiredMarkdownFromStdin(readStdinText, commandName) {
+    const markdown = String(await readStdinText() || '');
+    if (!markdown.trim()) {
+        cliError(`${commandName} 仅支持通过 stdin 提供 Markdown 内容（例如 <<'EOF' ... EOF）`);
+        return '';
+    }
+    return markdown;
 }
 
 function createCliHandlers(deps) {
@@ -332,17 +351,19 @@ function createCliHandlers(deps) {
         'append-block': async (args) => {
             const positional = args.slice(1);
             const parentBlockId = positional[0];
-            const markdown = positional.slice(1).join(' ').trim();
 
             if (!parentBlockId) {
                 cliError('请提供父块ID');
                 return;
             }
 
-            if (!markdown) {
-                cliError('请提供要追加的Markdown内容');
+            if (positional.length > 1) {
+                cliError('append-block 仅支持通过 stdin 传入 Markdown 内容');
                 return;
             }
+
+            const markdown = await readRequiredMarkdownFromStdin(readStdinText, 'append-block');
+            if (!markdown) return;
 
             const result = await appendMarkdownToBlock(parentBlockId, markdown);
             console.log(JSON.stringify(result, null, 2));
@@ -387,11 +408,13 @@ function createCliHandlers(deps) {
                 return;
             }
 
-            const markdown = positional.join(' ').trim();
-            if (!markdown) {
-                cliError('请提供要插入的Markdown内容');
+            if (positional.length > 0) {
+                cliError('insert-block 仅支持通过 stdin 传入 Markdown 内容');
                 return;
             }
+
+            const markdown = await readRequiredMarkdownFromStdin(readStdinText, 'insert-block');
+            if (!markdown) return;
 
             const result = await insertBlock(markdown, anchors);
             console.log(JSON.stringify(result, null, 2));
@@ -402,16 +425,21 @@ function createCliHandlers(deps) {
             const clearMode = hasClearFlag(raw);
             const positional = stripCommandFlags(raw);
             const headingBlockId = positional[0];
-            const markdown = clearMode ? '' : positional.slice(1).join(' ').trim();
 
             if (!headingBlockId) {
                 cliError('请提供标题块ID');
                 return;
             }
 
-            if (!clearMode && !markdown) {
-                cliError('请提供替换内容，或使用 --clear 清空该章节');
+            if (positional.length > 1) {
+                cliError('replace-section 仅支持通过 stdin 传入 Markdown 内容');
                 return;
+            }
+
+            let markdown = '';
+            if (!clearMode) {
+                markdown = await readRequiredMarkdownFromStdin(readStdinText, 'replace-section');
+                if (!markdown) return;
             }
 
             const result = await replaceSection(headingBlockId, markdown);
@@ -427,11 +455,14 @@ function createCliHandlers(deps) {
                 return;
             }
 
-            const inlinePatch = positional.slice(1).join(' ').trim();
-            const stdinPatch = await readStdinText();
-            const patchText = inlinePatch || String(stdinPatch || '').trim();
+            if (positional.length > 1) {
+                cliError('apply-patch 仅支持通过 stdin 提供 PMF 文本');
+                return;
+            }
+
+            const patchText = String(await readStdinText() || '').trim();
             if (!patchText) {
-                cliError('请通过参数或 stdin 提供 PMF 文本');
+                cliError('apply-patch 仅支持通过 stdin 提供 PMF 文本（例如 < /tmp/doc.pmf）');
                 return;
             }
 
@@ -552,7 +583,7 @@ function createCliHandlers(deps) {
             const positional = args.slice(1);
             const notebook = positional[0];
             const title = positional[1];
-            const markdown = positional.slice(2).join(' ').trim();
+            let markdown = '';
 
             if (!notebook) {
                 cliError('请提供笔记本ID');
@@ -562,6 +593,15 @@ function createCliHandlers(deps) {
             if (!title) {
                 cliError('请提供文档标题');
                 return;
+            }
+
+            if (positional.length > 2) {
+                cliError('create-doc 的初始内容仅支持通过 stdin 传入 Markdown；不传 stdin 则创建空文档');
+                return;
+            }
+
+            if (!process.stdin.isTTY) {
+                markdown = String(await readStdinText() || '').trim();
             }
 
             const result = await createDocWithMd(notebook, `/${title}`, markdown);
@@ -589,14 +629,12 @@ function createCliHandlers(deps) {
                 return;
             }
 
-            const result = await renameDoc(pathInfo.notebook, pathInfo.path, newTitle);
+            await renameDoc(pathInfo.notebook, pathInfo.path, newTitle);
             console.log(JSON.stringify({ success: true, docId, newTitle }, null, 2));
         },
 
         'update-block': async (args) => {
-            const raw = args.slice(1);
-            const useStdin = raw.includes('--stdin');
-            const positional = raw.filter(a => a !== '--stdin');
+            const positional = args.slice(1);
             const blockId = positional[0];
 
             if (!blockId) {
@@ -604,17 +642,13 @@ function createCliHandlers(deps) {
                 return;
             }
 
-            let markdown;
-            if (useStdin) {
-                markdown = String(await readStdinText() || '').trim();
-            } else {
-                markdown = positional.slice(1).join(' ').trim();
-            }
-
-            if (!markdown) {
-                cliError('请提供新的Markdown内容（参数传入或 --stdin 从标准输入读取）');
+            if (positional.length > 1) {
+                cliError('update-block 仅支持通过 stdin 传入 Markdown 内容');
                 return;
             }
+
+            const markdown = await readRequiredMarkdownFromStdin(readStdinText, 'update-block');
+            if (!markdown) return;
 
             const result = await updateBlock(blockId, markdown);
             console.log(JSON.stringify(result, null, 2));

@@ -97,12 +97,12 @@ node index.js version
 
 写入：
 
-- `create-doc <notebookID> <title> [markdown]`
+- `create-doc <notebookID> <title>`（初始内容仅支持 stdin，可省略）
 - `rename-doc <docID> <newTitle>`
-- `append-block <parentID> <markdown>`
-- `insert-block <--before <blockID>|--after <blockID>|--parent <blockID>> <markdown>`
-- `replace-section <headingID> <markdown|--clear>`
-- `update-block <blockID> <markdown|--stdin>`
+- `append-block <parentID>`（Markdown 仅支持 stdin）
+- `insert-block <--before <blockID>|--after <blockID>|--parent <blockID>>`（Markdown 仅支持 stdin）
+- `replace-section <headingID>` 或 `replace-section <headingID> --clear`（Markdown 仅支持 stdin）
+- `update-block <blockID>`（Markdown 仅支持 stdin）
 - `delete-block <blockID>`
 - `apply-patch <docID> < /tmp/doc.pmf`
 - `subdoc-analyze-move <targetID> <sourceIDs> [depth]`
@@ -116,22 +116,32 @@ node index.js version
 
 ```bash
 node index.js open-doc "docID" readable
-SIYUAN_ENABLE_WRITE=true node index.js update-block "blockID" "新内容"
+SIYUAN_ENABLE_WRITE=true node index.js update-block "blockID" <<'EOF'
+新内容（支持 $q \to \hat{o}$）
+EOF
 ```
 
 ### 2) 改章节
 
 ```bash
 node index.js open-doc "docID" readable
-SIYUAN_ENABLE_WRITE=true node index.js replace-section "headingBlockID" $'段落A\n\n段落B'
+SIYUAN_ENABLE_WRITE=true node index.js replace-section "headingBlockID" <<'EOF'
+段落A
+
+段落B
+EOF
 ```
 
 ### 2.5) 在指定位置插入
 
 ```bash
 node index.js open-doc "docID" readable
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "targetBlockID" "插入在该块之前"
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "targetBlockID" "插入在该块之后"
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "targetBlockID" <<'EOF'
+插入在该块之前
+EOF
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "targetBlockID" <<'EOF'
+插入在该块之后
+EOF
 ```
 
 ### 3) 批量改（PMF）

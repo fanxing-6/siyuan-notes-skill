@@ -117,13 +117,13 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 
 | Command | Signature | 适用场景 |
 |---------|-----------|---------|
-| `create-doc` | `<notebookID> <标题> [markdown]` | 创建新文档（标题即文档名） |
+| `create-doc` | `<notebookID> <标题>` | 创建新文档（标题即文档名，初始内容仅支持 stdin） |
 | `rename-doc` | `<docID> <新标题>` | 重命名文档 |
-| `update-block` | `<块ID> <markdown\|--stdin>` | 更新单个块内容（多行内容用 `--stdin`） |
+| `update-block` | `<块ID>` | 更新单个块内容（Markdown 仅支持 stdin） |
 | `delete-block` | `<块ID>` | 删除单个块 |
-| `append-block` | `<parentID> <markdown>` | 添加新内容（parentID 可以是文档 ID 或标题块 ID） |
-| `insert-block` | `<--before 块ID\|--after 块ID\|--parent 块ID> <markdown>` | 在指定锚点插入内容（前/后/父块下） |
-| `replace-section` | `<headingID> <markdown\|--clear>` | 替换/清空章节（保留标题块本身，只替换子内容；新 markdown 不要重复标题） |
+| `append-block` | `<parentID>` | 添加新内容（parentID 可以是文档 ID 或标题块 ID；Markdown 仅支持 stdin） |
+| `insert-block` | `<--before 块ID\|--after 块ID\|--parent 块ID>` | 在指定锚点插入内容（前/后/父块下；Markdown 仅支持 stdin） |
+| `replace-section` | `<headingID>` 或 `<headingID> --clear` | 替换/清空章节（保留标题块本身；Markdown 仅支持 stdin） |
 | `apply-patch` | `<docID> < /path/to/doc.pmf` | **仅限**批量修改/删除/重排已有块（拒绝 partial PMF） |
 | `move-docs-by-id` | `<targetID> <sourceIDs>` | 移动文档（需先 open-doc 目标文档**和**所有来源文档） |
 | `subdoc-analyze-move` | `<targetID> <sourceIDs> [depth]` | 分析移动计划（只读） |
@@ -156,17 +156,27 @@ SIYUAN_ENABLE_WRITE=true node index.js apply-patch "docID" < /tmp/doc.pmf
 
 ```bash
 node index.js open-doc "docID" readable                    # 先读
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "## 新标题"
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "段落内容"
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "- [ ] 任务"
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+## 新标题
+EOF
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+段落内容
+EOF
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+- [ ] 任务
+EOF
 ```
 
 ### 3.5 在指定位置插入内容
 
 ```bash
 node index.js open-doc "docID" readable
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "目标块ID" "插入在该块之前"
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID" "插入在该块之后"
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "目标块ID" <<'EOF'
+插入在该块之前
+EOF
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID" <<'EOF'
+插入在该块之后
+EOF
 ```
 
 ### 4. 重构文档（如拆分表格为多个）
@@ -183,17 +193,23 @@ node index.js open-doc "docID" patchable
 # 所以新内容不要重复标题（例如标题是 "## 表格" 则直接追加表格数据即可）
 SIYUAN_ENABLE_WRITE=true node index.js replace-section "标题块ID" --clear
 # 追加到标题块 ID 下 → 新内容会出现在该标题的章节内
-SIYUAN_ENABLE_WRITE=true node index.js append-block "标题块ID" "### 概览"
-SIYUAN_ENABLE_WRITE=true node index.js append-block "标题块ID" "|列1|列2|
+SIYUAN_ENABLE_WRITE=true node index.js append-block "标题块ID" <<'EOF'
+### 概览
+EOF
+SIYUAN_ENABLE_WRITE=true node index.js append-block "标题块ID" <<'EOF'
+|列1|列2|
 |---|---|
-|数据|数据|"
+|数据|数据|
+EOF
 
 # 方案B：没有标题块 → 用 node -e 删除旧块再追加
 SIYUAN_ENABLE_WRITE=true node -e "
 const s = require('./index.js');
 s.deleteBlock('旧块ID').then(r => console.log(JSON.stringify(r)));
 "
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "新内容"
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+新内容
+EOF
 ```
 
 ### 5. 创建新文档
@@ -205,8 +221,11 @@ node index.js notebooks
 # 创建空文档
 SIYUAN_ENABLE_WRITE=true node index.js create-doc "笔记本ID" "文档标题"
 
-# 创建带初始内容的文档（注意：用 $'...' 语法才能传递真正的换行）
-SIYUAN_ENABLE_WRITE=true node index.js create-doc "笔记本ID" "文档标题" $'## 第一章\n内容'
+# 创建带初始内容的文档（Markdown 仅支持 stdin）
+SIYUAN_ENABLE_WRITE=true node index.js create-doc "笔记本ID" "文档标题" <<'EOF'
+## 第一章
+内容
+EOF
 
 # 重命名已有文档
 SIYUAN_ENABLE_WRITE=true node index.js rename-doc "文档ID" "新标题"
@@ -217,12 +236,16 @@ SIYUAN_ENABLE_WRITE=true node index.js rename-doc "文档ID" "新标题"
 ```bash
 # 修改单个块
 node index.js open-doc "文档ID" readable
-SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" "新内容"
+SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" <<'EOF'
+新内容
+EOF
 
-# 多行内容用 --stdin
-echo '## 新标题
+# 多行内容同样通过 stdin
+SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" <<'EOF'
+## 新标题
 
-段落内容' | SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" --stdin
+段落内容
+EOF
 
 # 删除单个块
 node index.js open-doc "文档ID" readable

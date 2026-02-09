@@ -357,14 +357,14 @@ node index.js version-check
 ### create-doc — 创建新文档
 
 ```bash
-node index.js create-doc <笔记本ID> <标题> [Markdown内容]
+node index.js create-doc <笔记本ID> <标题>
 ```
 
 | 参数 | 必需 | 说明 |
 |------|------|------|
 | 笔记本ID | 是 | 目标笔记本（用 `notebooks` 命令查询） |
 | 标题 | 是 | 文档标题（自动作为文档路径 `/标题`） |
-| Markdown | 否 | 文档初始内容 |
+| stdin | 否 | 文档初始内容（仅支持 stdin；不提供则创建空文档） |
 
 **返回**：JSON，含新文档 ID
 
@@ -376,13 +376,17 @@ node index.js notebooks
 # 创建空文档
 SIYUAN_ENABLE_WRITE=true node index.js create-doc "笔记本ID" "我的新文档"
 
-# 创建带初始内容的文档（必须用 $'...' 传递真实换行）
-SIYUAN_ENABLE_WRITE=true node index.js create-doc "笔记本ID" "会议纪要" $'## 议题\n\n## 决议'
+# 创建带初始内容的文档（仅支持 stdin）
+SIYUAN_ENABLE_WRITE=true node index.js create-doc "笔记本ID" "会议纪要" <<'EOF'
+## 议题
+
+## 决议
+EOF
 ```
 
 > **注意**：标题即文档名。如果要创建子文档，使用 JS API `createDocWithMd(notebook, '/父文档/子文档标题', markdown)`。
 >
-> **Bash 换行提示**：Markdown 内容中的换行必须用 `$'...\n...'`（ANSI-C quoting）传递。普通双引号 `"...\n..."` 中的 `\n` 会被当作两个字面字符而非换行。
+> **输入规范**：写入类命令的 Markdown 一律使用 stdin（推荐 heredoc `<<'EOF'`），避免 shell 展开破坏 `$...$` 公式。
 
 ---
 
@@ -411,31 +415,39 @@ SIYUAN_ENABLE_WRITE=true node index.js rename-doc "文档ID" "新标题"
 ### append-block — 追加内容
 
 ```bash
-node index.js append-block <父块ID> <Markdown内容>
+node index.js append-block <父块ID>
 ```
 
 | 参数 | 必需 | 说明 |
 |------|------|------|
 | 父块ID | 是 | 追加到哪个块下。文档 ID → 追加到文档末尾；标题块 ID → 追加到该标题的章节内 |
-| Markdown | 是 | 要追加的内容（引号包裹） |
+| stdin | 是 | 要追加的 Markdown 内容（仅支持 stdin） |
 
 **返回**：JSON
 
 **常见用法：**
 ```bash
 # 追加段落到文档末尾
-SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID" "新段落"
+SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID" <<'EOF'
+新段落
+EOF
 
 # 追加标题
-SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID" "## 新标题"
+SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID" <<'EOF'
+## 新标题
+EOF
 
-# 追加表格（多行内容用引号包裹）
-SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID" "|列1|列2|
+# 追加表格
+SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID" <<'EOF'
+|列1|列2|
 |---|---|
-|a|b|"
+|a|b|
+EOF
 
 # 追加任务
-SIYUAN_ENABLE_WRITE=true node index.js append-block "父块ID" "- [ ] 待办事项"
+SIYUAN_ENABLE_WRITE=true node index.js append-block "父块ID" <<'EOF'
+- [ ] 待办事项
+EOF
 ```
 
 ---
@@ -443,9 +455,9 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "父块ID" "- [ ] 待办事�
 ### insert-block — 在指定位置插入
 
 ```bash
-node index.js insert-block --before <块ID> <Markdown内容>
-node index.js insert-block --after <块ID> <Markdown内容>
-node index.js insert-block --parent <块ID> <Markdown内容>
+node index.js insert-block --before <块ID>
+node index.js insert-block --after <块ID>
+node index.js insert-block --parent <块ID>
 ```
 
 | 参数 | 必需 | 说明 |
@@ -453,20 +465,26 @@ node index.js insert-block --parent <块ID> <Markdown内容>
 | --before 块ID | 三选一 | 在该块之前插入（映射到 nextID） |
 | --after 块ID | 三选一 | 在该块之后插入（映射到 previousID） |
 | --parent 块ID | 三选一 | 作为目标父块的末尾子块插入（映射到 parentID） |
-| Markdown | 是 | 要插入的内容（引号包裹） |
+| stdin | 是 | 要插入的 Markdown 内容（仅支持 stdin） |
 
 **返回**：JSON
 
 **常见用法：**
 ```bash
 # 在目标块前插入（例如给文档开头加导读）
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "目标块ID" "## 导读"
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "目标块ID" <<'EOF'
+## 导读
+EOF
 
 # 在目标块后插入
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID" "补充说明"
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID" <<'EOF'
+补充说明
+EOF
 
 # 作为父块末尾子块插入
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --parent "父块ID" "- [ ] 新任务"
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --parent "父块ID" <<'EOF'
+- [ ] 新任务
+EOF
 ```
 
 > `insert-block` 同样受写入围栏和版本检查保护：先 `open-doc` / `open-section`，再写入。
@@ -476,14 +494,14 @@ SIYUAN_ENABLE_WRITE=true node index.js insert-block --parent "父块ID" "- [ ] �
 ### replace-section — 替换章节
 
 ```bash
-node index.js replace-section <标题块ID> <Markdown内容>
+node index.js replace-section <标题块ID>
 node index.js replace-section <标题块ID> --clear
 ```
 
 | 参数 | 必需 | 说明 |
 |------|------|------|
 | 标题块ID | 是 | 必须是标题块（type=h） |
-| Markdown | 是（除非 --clear） | 替换内容 |
+| stdin | 是（除非 --clear） | 替换内容（仅支持 stdin） |
 | --clear | 否 | 清空该标题下所有子块 |
 
 **行为**：删除标题下所有子块 → 追加新内容。**标题块本身保留不变**，所以新 Markdown 内容**不要重复标题**（例如标题是 `## 第一章`，新内容应直接是正文段落、列表等，而不是再写一个 `## ...`）。
@@ -516,29 +534,26 @@ node index.js apply-patch <文档ID> < /tmp/doc.pmf
 ### update-block — 更新单个块
 
 ```bash
-node index.js update-block <块ID> <Markdown内容>
-node index.js update-block <块ID> --stdin
+node index.js update-block <块ID>
 ```
 
 | 参数 | 必需 | 说明 |
 |------|------|------|
 | 块ID | 是 | 要更新的块 ID |
-| Markdown | 是（除非 --stdin） | 新的块内容 |
-| --stdin | 否 | 从标准输入读取 Markdown 内容（适合多行/代码块） |
+| stdin | 是 | 新的块内容（仅支持 stdin） |
 
 **返回**：JSON
 
 **常见用法：**
 ```bash
-# 简单修改
+# 修改内容（通过 stdin）
 node index.js open-doc "文档ID" readable
-SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" "修改后的内容"
-
-# 多行内容通过 stdin
-echo '## 新标题
+SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" <<'EOF'
+## 新标题
 
 - 列表项1
-- 列表项2' | SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" --stdin
+- 列表项2
+EOF
 ```
 
 > **优势**：无需导出/提交完整 PMF，直接修改单个块，零上下文开销。
@@ -619,7 +634,7 @@ s.deleteBlock('要删除的块ID').then(r => console.log(JSON.stringify(r)));
 
 ### 更新单个块内容
 
-> **推荐使用 CLI**：`SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" "新内容"`（多行用 `--stdin`）
+> **推荐使用 CLI**：`SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" <<'EOF' ... EOF`
 
 JS API 方式（兜底）：
 ```bash
@@ -632,7 +647,7 @@ s.updateBlock('块ID', '新的 Markdown 内容').then(r => console.log(JSON.stri
 
 ### 在指定位置插入（JS API）
 
-> **推荐使用 CLI**：`SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "块ID" "内容"`
+> **推荐使用 CLI**：`SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "块ID" <<'EOF' ... EOF`
 
 JS API 方式（兜底）：
 ```bash
@@ -734,9 +749,15 @@ node index.js open-doc "文档ID" patchable --full > /tmp/doc.pmf
 node index.js open-doc "docID" readable
 
 # 2. 连续写入无需重新读取（每次写入后版本自动刷新）
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容1"
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容2"
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容3"
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+内容1
+EOF
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+内容2
+EOF
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+内容3
+EOF
 
 # ⚠️ 如果在步骤 1 和 2 之间有其他端修改了文档，会报版本冲突，需要重新 open-doc
 ```

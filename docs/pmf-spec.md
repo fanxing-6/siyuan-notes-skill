@@ -87,11 +87,17 @@ SIYUAN_ENABLE_WRITE=true node index.js apply-patch "docID" < /tmp/doc.pmf
 node index.js open-doc "docID" readable
 
 # 2. 追加内容到文档末尾（parentID = 文档ID）
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "## 新标题"
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "新段落内容"
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+## 新标题
+EOF
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+新段落内容
+EOF
 
 # 3. 或追加到特定块下
-SIYUAN_ENABLE_WRITE=true node index.js append-block "某个块ID" "子内容"
+SIYUAN_ENABLE_WRITE=true node index.js append-block "某个块ID" <<'EOF'
+子内容
+EOF
 ```
 
 ### 策略 2.5：需要在指定块前/后插入（用 insert-block）
@@ -103,10 +109,14 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "某个块ID" "子内容"
 node index.js open-doc "docID" readable
 
 # 2. 在目标块前插入
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "目标块ID" "## 导读"
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "目标块ID" <<'EOF'
+## 导读
+EOF
 
 # 3. 或在目标块后插入
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID" "补充说明"
+SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID" <<'EOF'
+补充说明
+EOF
 ```
 
 ### 策略 3：需要替换某个章节（用 replace-section）
@@ -118,7 +128,9 @@ SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID" "补�
 node index.js open-doc "docID" patchable
 
 # 2. 替换标题下的所有内容
-SIYUAN_ENABLE_WRITE=true node index.js replace-section "标题块ID" "新的段落内容"
+SIYUAN_ENABLE_WRITE=true node index.js replace-section "标题块ID" <<'EOF'
+新的段落内容
+EOF
 ```
 
 ### 策略 4：需要重构整个文档（先清空再逐步追加）
@@ -132,14 +144,20 @@ node index.js open-doc "docID" readable
 # 2. 清空标题下内容（如果有标题）或逐个删除旧块
 SIYUAN_ENABLE_WRITE=true node index.js replace-section "标题块ID" --clear
 # 3. 逐步追加新内容
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "## 概览"
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "|列1|列2|
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+## 概览
+EOF
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+|列1|列2|
 |---|---|
-|数据|数据|"
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "## 详情"
+|数据|数据|
+EOF
+SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
+## 详情
+EOF
 ```
 
-**注意：** 每次 append-block / insert-block 都是独立的 API 调用，不需要重新 open-doc（每次写入后版本自动刷新，支持连续写入）。
+**注意：** 每次 append-block / insert-block 都是独立的 API 调用，不需要重新 open-doc（每次写入后版本自动刷新，支持连续写入）。写入内容统一必须通过 stdin（`<<'EOF'`）传入，避免 shell 展开破坏公式。
 
 ---
 
