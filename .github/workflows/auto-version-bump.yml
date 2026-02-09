@@ -1,0 +1,44 @@
+name: Auto Version Bump
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  bump:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - name: Bump patch version
+        run: npm version patch --no-git-tag-version
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          if git diff --cached --quiet; then
+            echo "No version change to commit."
+            exit 0
+          fi
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          git commit -m "chore: bump version to ${NEW_VERSION}"
+          if git rev-parse -q --verify "refs/tags/v${NEW_VERSION}"; then
+            echo "Tag v${NEW_VERSION} already exists."
+          else
+            git tag -a "v${NEW_VERSION}" -m "v${NEW_VERSION}"
+          fi
+          git push
+          git push --tags
