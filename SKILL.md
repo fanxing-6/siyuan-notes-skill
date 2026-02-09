@@ -276,6 +276,7 @@ node index.js open-doc "文档ID" patchable --full > /tmp/doc.pmf
 - `open-doc patchable` 返回 PMF 格式 → 仅用于编辑后 apply-patch（超长文档自动分页，分页 PMF 含 `partial=true`，**不可用于 apply-patch**）
 - `open-section` 返回单章节内容 → 适合精确阅读/编辑特定章节
 - 写入命令返回 JSON（通常很冗长） → 只提取关键信息（如新文档 ID、成功/失败）展示给用户，不要原样输出全部 JSON
+- 公式渲染：行内公式用 `$...$`，独立公式块用 `$$...$$`（思源会渲染为数学块）
 
 ## Supporting Files
 
