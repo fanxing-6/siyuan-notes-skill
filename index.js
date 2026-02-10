@@ -1690,6 +1690,307 @@ async function moveBlock(id, anchors = {}) {
     }, { requireAuth: true });
 }
 
+function normalizeMarkdownLineEndings(markdown) {
+    return String(markdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function isMarkdownBlankLine(line) {
+    return String(line || '').trim().length === 0;
+}
+
+function isDisplayMathFenceLine(trimmedLine) {
+    return /^\$\$\s*$/.test(String(trimmedLine || ''));
+}
+
+function isBracketMathOpenLine(trimmedLine) {
+    return /^\\\[\s*$/.test(String(trimmedLine || ''));
+}
+
+function isBracketMathCloseLine(trimmedLine) {
+    return /^\\\]\s*$/.test(String(trimmedLine || ''));
+}
+
+function isHeadingLine(trimmedLine) {
+    return /^#{1,6}\s+/.test(String(trimmedLine || ''));
+}
+
+function isHorizontalRuleLine(trimmedLine) {
+    return /^([-*_]\s*){3,}$/.test(String(trimmedLine || ''));
+}
+
+function isBlockquoteLine(trimmedLine) {
+    return /^>\s?/.test(String(trimmedLine || ''));
+}
+
+function isListStartLine(line) {
+    return /^\s*(?:[-*+]\s+\[[ xX-]\]\s+|[-*+]\s+|\d+[.)]\s+)/.test(String(line || ''));
+}
+
+function isListContinuationLine(line) {
+    return /^\s{2,}\S/.test(String(line || ''));
+}
+
+function getFenceMarker(line) {
+    const trimmed = String(line || '').trimStart();
+    const match = trimmed.match(/^(`{3,}|~{3,})/);
+    if (!match) {
+        return null;
+    }
+    const marker = match[1];
+    return {
+        char: marker[0],
+        size: marker.length
+    };
+}
+
+function isFenceCloseLine(line, marker) {
+    if (!marker) {
+        return false;
+    }
+    const trimmed = String(line || '').trimStart();
+    const regex = new RegExp(`^${marker.char}{${marker.size},}\\s*$`);
+    return regex.test(trimmed);
+}
+
+function isTableDividerLine(trimmedLine) {
+    return /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(String(trimmedLine || ''));
+}
+
+function isTableRowLine(trimmedLine) {
+    return /^\|?.*\|.*\|?$/.test(String(trimmedLine || ''));
+}
+
+function isTableStart(lines, index) {
+    const current = String(lines[index] || '').trim();
+    const next = String(lines[index + 1] || '').trim();
+    return isTableRowLine(current) && isTableDividerLine(next);
+}
+
+function isBlockStarter(lines, index) {
+    const line = String(lines[index] || '');
+    const trimmed = line.trim();
+    return !!getFenceMarker(line)
+        || isDisplayMathFenceLine(trimmed)
+        || isBracketMathOpenLine(trimmed)
+        || isHeadingLine(trimmed)
+        || isHorizontalRuleLine(trimmed)
+        || isBlockquoteLine(trimmed)
+        || isListStartLine(line)
+        || isTableStart(lines, index);
+}
+
+/**
+ * 将 Markdown 拆分为可安全写入的块序列
+ * 目标：避免 updateBlock 一次写入隐式生成多个块导致刷新后丢失
+ * @param {string} markdown - 原始Markdown
+ * @returns {Array<string>} 块级Markdown列表
+ */
+function splitMarkdownIntoWritableBlocks(markdown) {
+    const lines = normalizeMarkdownLineEndings(markdown).split('\n');
+    const blocks = [];
+    let i = 0;
+
+    const pushBlock = (blockLines) => {
+        const text = blockLines.join('\n').replace(/^\n+|\n+$/g, '');
+        if (text.trim().length > 0) {
+            blocks.push(text);
+        }
+    };
+
+    while (i < lines.length) {
+        while (i < lines.length && isMarkdownBlankLine(lines[i])) {
+            i += 1;
+        }
+        if (i >= lines.length) {
+            break;
+        }
+
+        const line = lines[i];
+        const trimmed = line.trim();
+
+        const fenceMarker = getFenceMarker(line);
+        if (fenceMarker) {
+            const block = [line];
+            i += 1;
+            while (i < lines.length) {
+                block.push(lines[i]);
+                if (isFenceCloseLine(lines[i], fenceMarker)) {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            pushBlock(block);
+            continue;
+        }
+
+        if (isDisplayMathFenceLine(trimmed)) {
+            const block = [line];
+            i += 1;
+            while (i < lines.length) {
+                block.push(lines[i]);
+                if (isDisplayMathFenceLine(String(lines[i] || '').trim())) {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            pushBlock(block);
+            continue;
+        }
+
+        if (isBracketMathOpenLine(trimmed)) {
+            const block = [line];
+            i += 1;
+            while (i < lines.length) {
+                block.push(lines[i]);
+                if (isBracketMathCloseLine(String(lines[i] || '').trim())) {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            pushBlock(block);
+            continue;
+        }
+
+        if (isHeadingLine(trimmed) || isHorizontalRuleLine(trimmed)) {
+            pushBlock([line]);
+            i += 1;
+            continue;
+        }
+
+        if (isTableStart(lines, i)) {
+            const block = [lines[i], lines[i + 1]];
+            i += 2;
+            while (i < lines.length) {
+                const current = String(lines[i] || '').trim();
+                if (!current || !isTableRowLine(current)) {
+                    break;
+                }
+                block.push(lines[i]);
+                i += 1;
+            }
+            pushBlock(block);
+            continue;
+        }
+
+        if (isListStartLine(line)) {
+            const block = [line];
+            i += 1;
+            while (i < lines.length) {
+                if (isMarkdownBlankLine(lines[i])) {
+                    break;
+                }
+                if (!isListStartLine(lines[i]) && !isListContinuationLine(lines[i])) {
+                    break;
+                }
+                block.push(lines[i]);
+                i += 1;
+            }
+            pushBlock(block);
+            continue;
+        }
+
+        if (isBlockquoteLine(trimmed)) {
+            const block = [line];
+            i += 1;
+            while (i < lines.length) {
+                const currentTrimmed = String(lines[i] || '').trim();
+                if (!currentTrimmed || !isBlockquoteLine(currentTrimmed)) {
+                    break;
+                }
+                block.push(lines[i]);
+                i += 1;
+            }
+            pushBlock(block);
+            continue;
+        }
+
+        const paragraph = [line];
+        i += 1;
+        while (i < lines.length) {
+            if (isMarkdownBlankLine(lines[i])) {
+                break;
+            }
+            if (isBlockStarter(lines, i)) {
+                break;
+            }
+            paragraph.push(lines[i]);
+            i += 1;
+        }
+        pushBlock(paragraph);
+    }
+
+    return blocks;
+}
+
+function inferWritableBlockType(markdown) {
+    const text = normalizeMarkdownLineEndings(markdown).trim();
+    if (!text) {
+        return '';
+    }
+    const lines = text.split('\n');
+    const firstLine = String(lines[0] || '').trim();
+    const secondLine = String(lines[1] || '').trim();
+
+    if (getFenceMarker(firstLine)) {
+        return 'c';
+    }
+    if (isDisplayMathFenceLine(firstLine)) {
+        return 'm';
+    }
+    if (isHeadingLine(firstLine)) {
+        return 'h';
+    }
+    if (isListStartLine(lines[0] || '')) {
+        return 'l';
+    }
+    if (isBlockquoteLine(firstLine)) {
+        return 'b';
+    }
+    if (isTableRowLine(firstLine) && isTableDividerLine(secondLine)) {
+        return 'tb';
+    }
+    return 'p';
+}
+
+async function getBlockSnapshotById(id) {
+    const safeId = escapeSqlValue(id);
+    const rows = await executeSiyuanQuery(`
+        SELECT id, type, root_id, parent_id, markdown
+        FROM blocks
+        WHERE id = '${safeId}'
+        LIMIT 1
+    `);
+    if (!rows || rows.length === 0) {
+        return null;
+    }
+    return rows[0];
+}
+
+async function verifyPersistedBlock({ blockId, rootDocId, expectedType, context }) {
+    let lastError = '';
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+        const snapshot = await getBlockSnapshotById(blockId);
+        if (!snapshot) {
+            lastError = `[${context}] 写后校验失败: 块 ${blockId} 未持久化到数据库`;
+        } else if (isLikelyBlockId(rootDocId) && snapshot.root_id && snapshot.root_id !== rootDocId && snapshot.id !== rootDocId) {
+            lastError = `[${context}] 写后校验失败: 块 ${blockId} root_id=${snapshot.root_id}，预期=${rootDocId}`;
+        } else if (expectedType && snapshot.type !== expectedType) {
+            lastError = `[${context}] 写后校验失败: 块 ${blockId} 类型=${snapshot.type}，预期=${expectedType}`;
+        } else {
+            return;
+        }
+
+        if (attempt < 29) {
+            await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+    }
+
+    throw new Error(lastError || `[${context}] 写后校验失败: 块 ${blockId} 状态异常`);
+}
+
 /**
  * 更新块内容
  * @param {string} id - 块ID
@@ -1700,14 +2001,86 @@ async function updateBlock(id, markdown) {
     ensureWriteEnabled();
     assertNonEmptyString(id, 'id');
     assertNonEmptyString(markdown, 'markdown');
+
+    const normalizedMarkdown = normalizeMarkdownLineEndings(markdown);
+    const writableBlocks = splitMarkdownIntoWritableBlocks(normalizedMarkdown);
+    if (writableBlocks.length === 0) {
+        throw new Error('markdown 不能为空');
+    }
+
     const rootDocId = await ensureBlockReadBeforeWrite(id, 'updateBlock');
-    const result = await requestSiyuanApi(API_ENDPOINTS.UPDATE_BLOCK, {
+
+    if (writableBlocks.length === 1) {
+        const result = await requestSiyuanApi(API_ENDPOINTS.UPDATE_BLOCK, {
+            id,
+            dataType: 'markdown',
+            data: writableBlocks[0]
+        }, { requireAuth: true });
+        await refreshDocumentVersion(rootDocId);
+        await verifyPersistedBlock({
+            blockId: id,
+            rootDocId,
+            expectedType: inferWritableBlockType(writableBlocks[0]),
+            context: 'updateBlock-single'
+        });
+        return result;
+    }
+
+    // 多块内容不直接走单块 update，改为“更新首块 + 顺序插入剩余块”
+    const firstBlock = writableBlocks[0];
+    const updateResult = await requestSiyuanApi(API_ENDPOINTS.UPDATE_BLOCK, {
         id,
         dataType: 'markdown',
-        data: markdown
+        data: firstBlock
     }, { requireAuth: true });
     await refreshDocumentVersion(rootDocId);
-    return result;
+    await verifyPersistedBlock({
+        blockId: id,
+        rootDocId,
+        expectedType: inferWritableBlockType(firstBlock),
+        context: 'updateBlock-structured-first'
+    });
+
+    let anchorId = id;
+    const inserted = [];
+    for (let index = 1; index < writableBlocks.length; index += 1) {
+        const blockMarkdown = writableBlocks[index];
+        const insertResult = await insertBlock(blockMarkdown, { previousID: anchorId });
+        const insertedId = extractInsertedBlockId(insertResult);
+        if (!insertedId) {
+            throw new Error(`updateBlock 多块写入失败: 第 ${index + 1} 块插入后未返回有效块ID`);
+        }
+        cacheBlockRoot(insertedId, rootDocId);
+        await refreshDocumentVersion(rootDocId);
+        await verifyPersistedBlock({
+            blockId: insertedId,
+            rootDocId,
+            expectedType: inferWritableBlockType(blockMarkdown),
+            context: `updateBlock-structured-insert-${index + 1}`
+        });
+
+        inserted.push({
+            id: insertedId,
+            expectedType: inferWritableBlockType(blockMarkdown),
+            result: insertResult
+        });
+        anchorId = insertedId;
+    }
+
+    return {
+        mode: 'structured-update',
+        message: '检测到多块 Markdown，已自动切换为安全拆块写入（首块 update + 后续 insert）',
+        summary: {
+            inputBlockCount: writableBlocks.length,
+            updatedId: id,
+            insertedCount: inserted.length
+        },
+        updated: {
+            id,
+            result: updateResult
+        },
+        inserted
+    };
 }
 
 /**
