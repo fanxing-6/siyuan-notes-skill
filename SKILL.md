@@ -303,6 +303,33 @@ node index.js open-doc "文档ID" patchable --full > /tmp/doc.pmf
 - 写入命令返回 JSON（通常很冗长） → 只提取关键信息（如新文档 ID、成功/失败）展示给用户，不要原样输出全部 JSON
 - 公式渲染：行内公式用 `$...$`，独立公式块用 `$$...$$`（思源会渲染为数学块）
 
+## KaTeX Formula Rules (No Silent Rewrite)
+
+**核心原则：写入内容必须与模型输出一致。禁止在写入前/写入中对公式做隐式重写。**
+
+### 必须遵守
+
+- 数学定界符只用两种：行内 `$...$`，独立 `$$...$$`
+- 数学模式内禁止再次出现 `$`（例如 `$$ ... $x$ ... $$` 是错误）
+- 需要乘幂星号时写 `e^*` 或 `e^{\ast}`，不要写 `e^\*`
+- 计数项不要写 `#web_search`、`#tokens`，改写为 `N_{web\_search}`、`N_{tokens}`
+- 不要把“给普通文本用的转义”直接搬进数学模式（如 `\_`、`\=`、`\*`）
+
+### 常见错误与正确写法
+
+- 错误：`$$ ... $s_0,a_0^j,o_1^j$ ... $$`（数学模式内嵌 `$`）
+  正确：`$$ ... s_0, a_0^j, o_1^j ... $$`
+- 错误：`$-\lambda \cdot #web_search$`
+  正确：`$-\lambda \cdot N_{web\_search}$`
+- 错误：`$\hat e = e^\*$`
+  正确：`$\hat e = e^*$`
+
+### 写后验证（必须）
+
+- 写入后立刻 `open-doc <docID> readable` 回读，确保模型看到的是“最终落地文本”
+- 至少搜索以下高风险串：`KaTeX parse error`、`Undefined control sequence`、`e^\\*`、`#web_search`、`#tokens`
+- 若命中，优先修正文档内容本身，不要在工具层做自动改写
+
 ## Supporting Files
 
 - [docs/command-reference.md](docs/command-reference.md) — 每个命令的详细参数、默认值、返回格式、示例
