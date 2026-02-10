@@ -119,7 +119,7 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 |---------|-----------|---------|
 | `create-doc` | `<notebookID> <标题>` | 创建新文档（标题即文档名，初始内容仅支持 stdin） |
 | `rename-doc` | `<docID> <新标题>` | 重命名文档 |
-| `update-block` | `<块ID>` | 更新单个块内容（Markdown 仅支持 stdin） |
+| `update-block` | `<块ID>` | 更新块内容（Markdown 仅支持 stdin；多块输入自动拆块安全写入） |
 | `delete-block` | `<块ID>` | 删除单个块 |
 | `append-block` | `<parentID>` | 添加新内容（parentID 可以是文档 ID 或标题块 ID；Markdown 仅支持 stdin） |
 | `insert-block` | `<--before 块ID\|--after 块ID\|--parent 块ID>` | 在指定锚点插入内容（前/后/父块下；Markdown 仅支持 stdin） |
@@ -251,6 +251,8 @@ EOF
 node index.js open-doc "文档ID" readable
 SIYUAN_ENABLE_WRITE=true node index.js delete-block "块ID"
 ```
+
+> 若传入内容可解析为多个块（例如“段落 + $$公式$$”），`update-block` 会自动执行“首块 update + 后续 insert”，并做写后校验，避免刷新后内容丢失。
 
 ### 7. 超长文档处理
 

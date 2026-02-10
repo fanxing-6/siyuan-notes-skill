@@ -531,7 +531,7 @@ node index.js apply-patch <文档ID> < /tmp/doc.pmf
 
 ---
 
-### update-block — 更新单个块
+### update-block — 更新块内容（支持自动拆块）
 
 ```bash
 node index.js update-block <块ID>
@@ -540,9 +540,16 @@ node index.js update-block <块ID>
 | 参数 | 必需 | 说明 |
 |------|------|------|
 | 块ID | 是 | 要更新的块 ID |
-| stdin | 是 | 新的块内容（仅支持 stdin） |
+| stdin | 是 | 新的块内容（仅支持 stdin）。若内容可解析为多块，将自动切换为结构化写入 |
 
 **返回**：JSON
+
+- 单块输入：返回思源 `/api/block/updateBlock` 原始结果（数组）
+- 多块输入：返回结构化结果（对象）
+  - `mode: "structured-update"`
+  - `summary.inputBlockCount / summary.insertedCount`
+  - `updated`（首块 update 结果）
+  - `inserted[]`（后续 insert 结果）
 
 **常见用法：**
 ```bash
@@ -556,7 +563,42 @@ SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" <<'EOF'
 EOF
 ```
 
-> **优势**：无需导出/提交完整 PMF，直接修改单个块，零上下文开销。
+```bash
+# 混合内容（段落 + 显示公式）会自动拆块安全写入
+node index.js open-doc "文档ID" readable
+SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" <<'EOF'
+Display with formula:
+$$
+\hat{e}=e^*
+$$
+EOF
+```
+
+> **行为说明**：
+> 1) 若 stdin Markdown 只对应单个块，执行普通 `update-block`。  
+> 2) 若 stdin Markdown 对应多个块，自动执行“首块 update + 后续 insert”。  
+> 3) 每一步会做写后持久化/类型校验，防止“当前可见、刷新后消失”。
+
+**structured-update 返回示例：**
+```json
+{
+  "mode": "structured-update",
+  "summary": {
+    "inputBlockCount": 2,
+    "updatedId": "20260210165653-i3fa8yl",
+    "insertedCount": 1
+  },
+  "updated": { "id": "20260210165653-i3fa8yl" },
+  "inserted": [
+    {
+      "id": "20260210165705-u30ocvr",
+      "expectedType": "m"
+    }
+  ]
+}
+```
+
+> **优势**：无需导出/提交完整 PMF；且多块输入由工具自动安全落库。
 
 ---
 
@@ -644,6 +686,8 @@ const s = require('./index.js');
 s.updateBlock('块ID', '新的 Markdown 内容').then(r => console.log(JSON.stringify(r)));
 "
 ```
+
+> 与 CLI 一致：当传入 Markdown 会解析为多块时，`updateBlock()` 会返回 `mode: "structured-update"` 并自动执行拆块写入。
 
 ### 在指定位置插入（JS API）
 

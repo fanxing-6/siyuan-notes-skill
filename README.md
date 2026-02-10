@@ -69,7 +69,7 @@ node index.js version
 
 | 需求 | 推荐命令 | 说明 |
 |---|---|---|
-| 改一个块 | `update-block` | 最小改动，风险最低 |
+| 改一个块 | `update-block` | 优先单块更新；若输入包含多块结构会自动安全拆块写入 |
 | 删一个块 | `delete-block` | 不需要整文 PMF |
 | 改一个章节 | `replace-section` | 只影响标题下子块 |
 | 追加内容 | `append-block` | 简单稳定 |
@@ -102,7 +102,7 @@ node index.js version
 - `append-block <parentID>`（Markdown 仅支持 stdin）
 - `insert-block <--before <blockID>|--after <blockID>|--parent <blockID>>`（Markdown 仅支持 stdin）
 - `replace-section <headingID>` 或 `replace-section <headingID> --clear`（Markdown 仅支持 stdin）
-- `update-block <blockID>`（Markdown 仅支持 stdin）
+- `update-block <blockID>`（Markdown 仅支持 stdin；多块输入会自动拆块）
 - `delete-block <blockID>`
 - `apply-patch <docID> < /tmp/doc.pmf`
 - `subdoc-analyze-move <targetID> <sourceIDs> [depth]`
@@ -120,6 +120,8 @@ SIYUAN_ENABLE_WRITE=true node index.js update-block "blockID" <<'EOF'
 新内容（支持 $q \to \hat{o}$）
 EOF
 ```
+
+> `update-block` 现在支持自动拆块安全写入：当 stdin Markdown 会被解析为多个块（例如“普通段落 + $$公式块$$”），会自动执行“首块 update + 后续 insert”，并做写后持久化校验，避免“当前可见但刷新后消失”。
 
 ### 2) 改章节
 
@@ -182,6 +184,7 @@ SIYUAN_ENABLE_WRITE=true node index.js apply-patch "docID" < /tmp/doc.pmf
 
 - `读后写围栏`：先 `open-doc`（或 `open-section`）再重试。
 - `版本冲突`：重新读取最新文档后再写。
+- `写后校验失败`：等待 1-2 秒后重试；若持续失败，先 `open-doc` 刷新上下文并确认目标块仍存在。
 - `partial PMF 被拒绝`：改用 `--full` 或改用 `update-block/replace-section`。
 - `PMF 文档 ID 不匹配`：检查 `apply-patch` 的 docID 和 PMF header。
 
