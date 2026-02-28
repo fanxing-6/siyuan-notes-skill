@@ -1,6 +1,6 @@
 # 命令完整参考
 
-所有命令：`node index.js <command> [args]`
+所有命令：`node index.js {command} [args]`
 
 运行前提：cwd 必须是 skill 目录（即 `index.js` 所在目录）。
 若上层进程已注入 `SIYUAN_*` 环境变量，则无需创建 `.env`；若环境变量不可继承，再按提示创建 `.env`。不要在输出中打印完整 token。
@@ -12,7 +12,7 @@
 ### search — 搜索笔记
 
 ```bash
-node index.js search <关键词> [数量] [块类型]
+node index.js search {关键词} [数量] [块类型]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
@@ -30,7 +30,7 @@ node index.js search <关键词> [数量] [块类型]
 ### search-md — 搜索并输出 Markdown 页面
 
 ```bash
-node index.js search-md <关键词> [数量] [块类型]
+node index.js search-md {关键词} [数量] [块类型]
 ```
 
 参数同 `search`。**返回**：完整 Markdown 页面格式
@@ -40,7 +40,7 @@ node index.js search-md <关键词> [数量] [块类型]
 ### open-doc — 打开文档
 
 ```bash
-node index.js open-doc <文档ID> [readable|patchable] [--full] [--cursor <块ID>] [--limit-chars <N>] [--limit-blocks <N>]
+node index.js open-doc {文档ID} [readable|patchable] [--full] [--cursor {块ID}] [--limit-chars {N}] [--limit-blocks {N}]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
@@ -54,11 +54,11 @@ node index.js open-doc <文档ID> [readable|patchable] [--full] [--cursor <块ID
 
 **返回**：
 - `readable`：YAML 头 + Markdown 正文，适合阅读和总结。超长文档自动截断到 `--limit-chars` 字符（按行截断），附带标题大纲和导航提示
-- `patchable`：带块 ID 注释的 PMF 格式，用于编辑。超长文档自动分页，PMF header 含 `partial=true next_cursor=<块ID>`
+- `patchable`：带块 ID 注释的 PMF 格式，用于编辑。超长文档自动分页，PMF header 含 `partial=true next_cursor={块ID}`
 
 **超长文档自动截断行为**：
 - readable 视图：文本超过阈值时，YAML header 追加 `truncated: true`、`total_chars`、`shown_chars`，正文附带标题大纲和章节导航提示
-- patchable 视图：块数超过阈值时，PMF header 追加 `partial=true total_blocks=N shown_blocks=M next_cursor=<下一块ID>`
+- patchable 视图：块数超过阈值时，PMF header 追加 `partial=true total_blocks=N shown_blocks=M next_cursor={下一块ID}`
 - **partial PMF 不可用于 apply-patch**（会被自动拒绝，防止误删未包含的块）
 
 **副作用**：标记文档为"已读"并记录文档版本快照（满足写入前置条件，写入前会校验版本是否一致）
@@ -72,7 +72,7 @@ node index.js open-doc <文档ID> [readable|patchable] [--full] [--cursor <块ID
 ### open-section — 读取章节
 
 ```bash
-node index.js open-section <标题块ID> [readable|patchable]
+node index.js open-section {标题块ID} [readable|patchable]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
@@ -82,18 +82,18 @@ node index.js open-section <标题块ID> [readable|patchable]
 
 **返回**：
 - `readable`：YAML header（含 scope: section 信息）+ 该标题下所有子块的 Markdown
-- `patchable`：PMF 格式（header 含 `partial=true section=<标题块ID>`），仅包含该章节的块
+- `patchable`：PMF 格式（header 含 `partial=true section={标题块ID}`），仅包含该章节的块
 
 **副作用**：标记文档为"已读"
 
-> **注意**：patchable 视图的 PMF 标记为 `partial=true`，不可用于 apply-patch。如需编辑章节，使用 `replace-section` 或 `update-block`。
+**注意**：patchable 视图的 PMF 标记为 `partial=true`，不可用于 apply-patch。如需编辑章节，使用 `replace-section` 或 `update-block`。
 
 ---
 
 ### search-in-doc — 文档内搜索
 
 ```bash
-node index.js search-in-doc <文档ID> <关键词> [数量]
+node index.js search-in-doc {文档ID} {关键词} [数量]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
@@ -104,7 +104,7 @@ node index.js search-in-doc <文档ID> <关键词> [数量]
 
 **返回**：格式化文本，每行含块 ID、内容、类型、时间
 
-> 适合在超长文档中快速定位内容，无需读取整个文档。
+适合在超长文档中快速定位内容，无需读取整个文档。
 
 ---
 
@@ -136,7 +136,7 @@ node index.js docs [笔记本ID] [数量]
 ### headings — 文档标题
 
 ```bash
-node index.js headings <文档ID> [级别]
+node index.js headings {文档ID} [级别]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
@@ -151,7 +151,7 @@ node index.js headings <文档ID> [级别]
 ### blocks — 文档子块
 
 ```bash
-node index.js blocks <文档ID> [块类型]
+node index.js blocks {文档ID} [块类型]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
@@ -161,14 +161,14 @@ node index.js blocks <文档ID> [块类型]
 
 **返回**：格式化文本，每行含块 ID（如 `[20260206204442-j76ycfo]`），可用于 append-block / insert-block 的锚点。
 
-> 若块 markdown 含图片语法（如 `![alt](...)`），摘要会标记 `[img]`，方便 grep 定位图片块。
+若块 markdown 含图片语法（如 `![alt](...)`），摘要会标记 `[img]`，方便 grep 定位图片块。
 
 ---
 
 ### doc-children — 子文档列表
 
 ```bash
-node index.js doc-children <笔记本ID> [路径]
+node index.js doc-children {笔记本ID} [路径]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
@@ -183,7 +183,7 @@ node index.js doc-children <笔记本ID> [路径]
 ### doc-tree — 子文档树
 
 ```bash
-node index.js doc-tree <笔记本ID> [路径] [深度]
+node index.js doc-tree {笔记本ID} [路径] [深度]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
@@ -199,7 +199,7 @@ node index.js doc-tree <笔记本ID> [路径] [深度]
 ### doc-tree-id — 以文档 ID 展示子文档树
 
 ```bash
-node index.js doc-tree-id <文档ID> [深度]
+node index.js doc-tree-id {文档ID} [深度]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
@@ -214,7 +214,7 @@ node index.js doc-tree-id <文档ID> [深度]
 ### tag — 按标签搜索
 
 ```bash
-node index.js tag <标签名>
+node index.js tag {标签名}
 ```
 
 标签名不带 `#` 号。**返回**：格式化文本
@@ -224,7 +224,7 @@ node index.js tag <标签名>
 ### backlinks — 反向链接
 
 ```bash
-node index.js backlinks <块ID>
+node index.js backlinks {块ID}
 ```
 
 **返回**：引用了该块的所有块，格式化文本
@@ -251,7 +251,7 @@ node index.js tasks "[ ]" [天数]
 ### daily — Daily Note 查询
 
 ```bash
-node index.js daily <开始日期> <结束日期>
+node index.js daily {开始日期} {结束日期}
 ```
 
 日期格式：`YYYYMMDD`（如 `20260101`）。**返回**：格式化文本
@@ -261,7 +261,7 @@ node index.js daily <开始日期> <结束日期>
 ### attr — 按属性查询
 
 ```bash
-node index.js attr <属性名> [属性值]
+node index.js attr {属性名} [属性值]
 ```
 
 自定义属性需带 `custom-` 前缀。**返回**：格式化文本
@@ -281,7 +281,7 @@ node index.js bookmarks [书签名]
 ### random — 随机漫游
 
 ```bash
-node index.js random <文档ID>
+node index.js random {文档ID}
 ```
 
 **返回**：文档中随机一个标题，格式化文本
@@ -306,7 +306,7 @@ node index.js recent [天数] [块类型]
 ### unreferenced — 未被引用的文档
 
 ```bash
-node index.js unreferenced <笔记本ID>
+node index.js unreferenced {笔记本ID}
 ```
 
 **返回**：格式化文本
@@ -350,14 +350,14 @@ node index.js version-check
 2. 必须先用 `open-doc` 或 `open-section` 读取过目标文档/章节
 3. 文档在读取后不能被其他端修改过（**核心保护**：基于 `updated` 时间戳的乐观锁版本检查）
 
-> 读标记超过 3600 秒会自动过期，但这只是缓存清理机制；真正防止脏写的是版本检查。
+读标记超过 3600 秒会自动过期，但这只是缓存清理机制；真正防止脏写的是版本检查。
 
-> **例外**：`create-doc` 和 `rename-doc` 不需要先 `open-doc`（因为文档可能尚未创建或不需要读取内容）
+**例外**：`create-doc` 和 `rename-doc` 不需要先 `open-doc`（因为文档可能尚未创建或不需要读取内容）
 
 ### create-doc — 创建新文档
 
 ```bash
-node index.js create-doc <笔记本ID> <标题>
+node index.js create-doc {笔记本ID} {标题}
 ```
 
 | 参数 | 必需 | 说明 |
@@ -377,20 +377,16 @@ node index.js notebooks
 SIYUAN_ENABLE_WRITE=true node index.js create-doc "笔记本ID" "我的新文档"
 
 # 创建带初始内容的文档（仅支持 stdin）
-SIYUAN_ENABLE_WRITE=true node index.js create-doc "笔记本ID" "会议纪要" <<'EOF'
-## 议题
-
-## 决议
-EOF
+printf '## 议题\n\n## 决议' | SIYUAN_ENABLE_WRITE=true node index.js create-doc "笔记本ID" "会议纪要"
 ```
 
-> **注意**：标题即文档名。如果要创建子文档，使用 JS API `createDocWithMd(notebook, '/父文档/子文档标题', markdown)`。
->
-> **输入规范**：写入类命令的 Markdown 一律使用 stdin（推荐 heredoc `<<'EOF'`），避免 shell 展开破坏 `$...$` 公式。
+**注意**：标题即文档名。如果要创建子文档，使用 JS API `createDocWithMd(notebook, '/父文档/子文档标题', markdown)`。
+
+**输入规范**：写入类命令的 Markdown 一律使用 stdin（推荐 heredoc 或 printf pipe），避免 shell 展开破坏 `$...$` 公式。
 
 ### 公式写入规范（KaTeX）
 
-> **原则**：不要在工具/脚本层对模型输出做隐式公式重写。应让模型直接按规范输出，写入后按规则校验。
+**原则**：不要在工具/脚本层对模型输出做隐式公式重写。应让模型直接按规范输出，写入后按规则校验。
 
 **必须遵守：**
 
@@ -411,7 +407,7 @@ EOF
 
 **写后验证建议：**
 
-- 写入后运行 `open-doc <docID> readable` 回读最终文本
+- 写入后运行 `open-doc {docID} readable` 回读最终文本
 - 检查关键错误串：`KaTeX parse error`、`Undefined control sequence`、`e^\*`、`#web_search`、`#tokens`
 - 若发现问题，修正文档内容本身，不在写入链路中做 silent rewrite
 
@@ -420,7 +416,7 @@ EOF
 ### rename-doc — 重命名文档
 
 ```bash
-node index.js rename-doc <文档ID> <新标题>
+node index.js rename-doc {文档ID} {新标题}
 ```
 
 | 参数 | 必需 | 说明 |
@@ -435,14 +431,14 @@ node index.js rename-doc <文档ID> <新标题>
 SIYUAN_ENABLE_WRITE=true node index.js rename-doc "文档ID" "新标题"
 ```
 
-> **注意**：rename-doc 自动查询文档的笔记本和存储路径，只需提供文档 ID 和新标题。
+**注意**：rename-doc 自动查询文档的笔记本和存储路径，只需提供文档 ID 和新标题。
 
 ---
 
 ### append-block — 追加内容
 
 ```bash
-node index.js append-block <父块ID>
+node index.js append-block {父块ID}
 ```
 
 | 参数 | 必需 | 说明 |
@@ -455,26 +451,16 @@ node index.js append-block <父块ID>
 **常见用法：**
 ```bash
 # 追加段落到文档末尾
-SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID" <<'EOF'
-新段落
-EOF
+printf '新段落' | SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID"
 
 # 追加标题
-SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID" <<'EOF'
-## 新标题
-EOF
+printf '## 新标题' | SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID"
 
 # 追加表格
-SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID" <<'EOF'
-|列1|列2|
-|---|---|
-|a|b|
-EOF
+printf '|列1|列2|\n|---|---|\n|a|b|' | SIYUAN_ENABLE_WRITE=true node index.js append-block "文档ID"
 
 # 追加任务
-SIYUAN_ENABLE_WRITE=true node index.js append-block "父块ID" <<'EOF'
-- [ ] 待办事项
-EOF
+printf '- [ ] 待办事项' | SIYUAN_ENABLE_WRITE=true node index.js append-block "父块ID"
 ```
 
 ---
@@ -482,9 +468,9 @@ EOF
 ### insert-block — 在指定位置插入
 
 ```bash
-node index.js insert-block --before <块ID>
-node index.js insert-block --after <块ID>
-node index.js insert-block --parent <块ID>
+node index.js insert-block --before {块ID}
+node index.js insert-block --after {块ID}
+node index.js insert-block --parent {块ID}
 ```
 
 | 参数 | 必需 | 说明 |
@@ -499,30 +485,24 @@ node index.js insert-block --parent <块ID>
 **常见用法：**
 ```bash
 # 在目标块前插入（例如给文档开头加导读）
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "目标块ID" <<'EOF'
-## 导读
-EOF
+printf '## 导读' | SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "目标块ID"
 
 # 在目标块后插入
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID" <<'EOF'
-补充说明
-EOF
+printf '补充说明' | SIYUAN_ENABLE_WRITE=true node index.js insert-block --after "目标块ID"
 
 # 作为父块末尾子块插入
-SIYUAN_ENABLE_WRITE=true node index.js insert-block --parent "父块ID" <<'EOF'
-- [ ] 新任务
-EOF
+printf '- [ ] 新任务' | SIYUAN_ENABLE_WRITE=true node index.js insert-block --parent "父块ID"
 ```
 
-> `insert-block` 同样受写入围栏和版本检查保护：先 `open-doc` / `open-section`，再写入。
+`insert-block` 同样受写入围栏和版本检查保护：先 `open-doc` / `open-section`，再写入。
 
 ---
 
 ### replace-section — 替换章节
 
 ```bash
-node index.js replace-section <标题块ID>
-node index.js replace-section <标题块ID> --clear
+node index.js replace-section {标题块ID}
+node index.js replace-section {标题块ID} --clear
 ```
 
 | 参数 | 必需 | 说明 |
@@ -540,7 +520,7 @@ node index.js replace-section <标题块ID> --clear
 ### apply-patch — 应用 PMF 补丁
 
 ```bash
-node index.js apply-patch <文档ID> < /tmp/doc.pmf
+cat /tmp/doc.pmf | node index.js apply-patch {文档ID}
 ```
 
 | 参数 | 必需 | 说明 |
@@ -550,18 +530,18 @@ node index.js apply-patch <文档ID> < /tmp/doc.pmf
 
 **返回**：JSON，含 `plan.summary` 和 `execution`
 
-> **支持范围：update / delete / reorder / insert。** 详见 [docs/pmf-spec.md](pmf-spec.md)。
->
-> **PMF 必须完整**：提交的 PMF 文件必须包含文档的**所有**块。缺失的块会被视为删除操作。正确做法是先 `open-doc patchable --full > /tmp/doc.pmf` 导出完整 PMF，只修改目标块的文本内容，然后提交完整文件。**不要只写目标块的 PMF**，否则其他所有块都会被删除。
->
-> **partial PMF 被拒绝**：分页导出或 `open-section` patchable 导出的 PMF 含 `partial=true` 标记，apply-patch 会自动拒绝，防止未包含的块被误删。此时应改用 `update-block` 编辑单块，或 `replace-section` 编辑章节。
+**支持范围：update / delete / reorder / insert。** 详见 [docs/pmf-spec.md](pmf-spec.md)。
+
+**PMF 必须完整**：提交的 PMF 文件必须包含文档的**所有**块。缺失的块会被视为删除操作。正确做法是先 `node index.js open-doc {docID} patchable --full | tee /tmp/doc.pmf` 导出完整 PMF，只修改目标块的文本内容，然后提交完整文件。**不要只写目标块的 PMF**，否则其他所有块都会被删除。
+
+**partial PMF 被拒绝**：分页导出或 `open-section` patchable 导出的 PMF 含 `partial=true` 标记，apply-patch 会自动拒绝，防止未包含的块被误删。此时应改用 `update-block` 编辑单块，或 `replace-section` 编辑章节。
 
 ---
 
 ### update-block — 更新块内容（支持自动拆块）
 
 ```bash
-node index.js update-block <块ID>
+node index.js update-block {块ID}
 ```
 
 | 参数 | 必需 | 说明 |
@@ -582,29 +562,19 @@ node index.js update-block <块ID>
 ```bash
 # 修改内容（通过 stdin）
 node index.js open-doc "文档ID" readable
-SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" <<'EOF'
-## 新标题
-
-- 列表项1
-- 列表项2
-EOF
+printf '## 新标题\n\n- 列表项1\n- 列表项2' | SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID"
 ```
 
 ```bash
 # 混合内容（段落 + 显示公式）会自动拆块安全写入
 node index.js open-doc "文档ID" readable
-SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" <<'EOF'
-Display with formula:
-$$
-\hat{e}=e^*
-$$
-EOF
+printf 'Display with formula:\n$$\n\\hat{e}=e^*\n$$' | SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID"
 ```
 
-> **行为说明**：
-> 1) 若 stdin Markdown 只对应单个块，执行普通 `update-block`。  
-> 2) 若 stdin Markdown 对应多个块，自动执行“首块 update + 后续 insert”。  
-> 3) 每一步会做写后持久化/类型校验，防止“当前可见、刷新后消失”。
+**行为说明**：
+1) 若 stdin Markdown 只对应单个块，执行普通 `update-block`。
+2) 若 stdin Markdown 对应多个块，自动执行"首块 update + 后续 insert"。
+3) 每一步会做写后持久化/类型校验，防止"当前可见、刷新后消失"。
 
 **structured-update 返回示例：**
 ```json
@@ -625,14 +595,14 @@ EOF
 }
 ```
 
-> **优势**：无需导出/提交完整 PMF；且多块输入由工具自动安全落库。
+**优势**：无需导出/提交完整 PMF；且多块输入由工具自动安全落库。
 
 ---
 
 ### delete-block — 删除单个块
 
 ```bash
-node index.js delete-block <块ID>
+node index.js delete-block {块ID}
 ```
 
 | 参数 | 必需 | 说明 |
@@ -647,14 +617,14 @@ node index.js open-doc "文档ID" readable
 SIYUAN_ENABLE_WRITE=true node index.js delete-block "块ID"
 ```
 
-> **优势**：无需 apply-patch，直接删除单个块。
+**优势**：无需 apply-patch，直接删除单个块。
 
 ---
 
 ### move-docs-by-id — 移动文档
 
 ```bash
-node index.js move-docs-by-id <目标ID> <来源ID列表>
+node index.js move-docs-by-id {目标ID} {来源ID列表}
 ```
 
 | 参数 | 必需 | 说明 |
@@ -671,7 +641,7 @@ node index.js move-docs-by-id <目标ID> <来源ID列表>
 ### subdoc-analyze-move — 分析子文档移动（只读）
 
 ```bash
-node index.js subdoc-analyze-move <目标ID> <来源ID列表> [深度]
+node index.js subdoc-analyze-move {目标ID} {来源ID列表} [深度]
 ```
 
 | 参数 | 必需 | 默认值 | 说明 |
@@ -690,53 +660,53 @@ CLI 无法满足时可直接调用导出的 API。
 
 ### 删除单个块
 
-> **推荐使用 CLI**：`SIYUAN_ENABLE_WRITE=true node index.js delete-block "块ID"`
+**推荐使用 CLI**：`SIYUAN_ENABLE_WRITE=true node index.js delete-block "块ID"`
 
 JS API 方式（兜底）：
 ```bash
 node index.js open-doc "文档ID" readable
 SIYUAN_ENABLE_WRITE=true node -e "
 const s = require('./index.js');
-s.deleteBlock('要删除的块ID').then(r => console.log(JSON.stringify(r)));
+s.deleteBlock('要删除的块ID').then(function(r) { console.log(JSON.stringify(r)) });
 "
 ```
 
 ### 更新单个块内容
 
-> **推荐使用 CLI**：`SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID" <<'EOF' ... EOF`
+**推荐使用 CLI**：`printf '...' | SIYUAN_ENABLE_WRITE=true node index.js update-block "块ID"`
 
 JS API 方式（兜底）：
 ```bash
 node index.js open-doc "文档ID" readable
 SIYUAN_ENABLE_WRITE=true node -e "
 const s = require('./index.js');
-s.updateBlock('块ID', '新的 Markdown 内容').then(r => console.log(JSON.stringify(r)));
+s.updateBlock('块ID', '新的 Markdown 内容').then(function(r) { console.log(JSON.stringify(r)) });
 "
 ```
 
-> 与 CLI 一致：当传入 Markdown 会解析为多块时，`updateBlock()` 会返回 `mode: "structured-update"` 并自动执行拆块写入。
+与 CLI 一致：当传入 Markdown 会解析为多块时，`updateBlock()` 会返回 `mode: "structured-update"` 并自动执行拆块写入。
 
 ### 在指定位置插入（JS API）
 
-> **推荐使用 CLI**：`SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "块ID" <<'EOF' ... EOF`
+**推荐使用 CLI**：`printf '...' | SIYUAN_ENABLE_WRITE=true node index.js insert-block --before "块ID"`
 
 JS API 方式（兜底）：
 ```bash
 node index.js open-doc "文档ID" readable
 SIYUAN_ENABLE_WRITE=true node -e "
 const s = require('./index.js');
-s.insertBlock('插入内容', { nextID: '目标块ID' }).then(r => console.log(JSON.stringify(r)));
+s.insertBlock('插入内容', { nextID: '目标块ID' }).then(function(r) { console.log(JSON.stringify(r)) });
 "
 ```
 
-> 锚点参数三选一：`{ nextID }`（前插）/ `{ previousID }`（后插）/ `{ parentID }`（父块下插入）。
+锚点参数三选一：`{ nextID }`（前插）/ `{ previousID }`（后插）/ `{ parentID }`（父块下插入）。
 
 ### 执行 SQL 查询
 
 ```bash
 node -e "
 const s = require('./index.js');
-s.executeSiyuanQuery('SELECT * FROM blocks WHERE type=\"d\" LIMIT 10').then(r => console.log(s.formatResults(r)));
+s.executeSiyuanQuery('SELECT * FROM blocks WHERE type=\"d\" LIMIT 10').then(function(r) { console.log(s.formatResults(r)) });
 "
 ```
 
@@ -745,7 +715,7 @@ s.executeSiyuanQuery('SELECT * FROM blocks WHERE type=\"d\" LIMIT 10').then(r =>
 ```bash
 node -e "
 const s = require('./index.js');
-s.getChildBlocks('文档或块ID').then(r => console.log(JSON.stringify(r, null, 2)));
+s.getChildBlocks('文档或块ID').then(function(r) { console.log(JSON.stringify(r, null, 2)) });
 "
 ```
 
@@ -754,22 +724,22 @@ s.getChildBlocks('文档或块ID').then(r => console.log(JSON.stringify(r, null,
 ```bash
 SIYUAN_ENABLE_WRITE=true node -e "
 const s = require('./index.js');
-s.createDocWithMd('笔记本ID', '/文档标题', '初始 Markdown').then(r => console.log(JSON.stringify(r)));
+s.createDocWithMd('笔记本ID', '/文档标题', '初始 Markdown').then(function(r) { console.log(JSON.stringify(r)) });
 "
 ```
 
-> `path` 参数的最后一段即为文档标题。例如 `/父文档/子标题` 会在"父文档"下创建名为"子标题"的文档。
+`path` 参数的最后一段即为文档标题。例如 `/父文档/子标题` 会在"父文档"下创建名为"子标题"的文档。
 
 ### 重命名文档（JS API）
 
 ```bash
 SIYUAN_ENABLE_WRITE=true node -e "
 const s = require('./index.js');
-s.renameDoc('笔记本ID', '/文档存储路径.sy', '新标题').then(r => console.log(JSON.stringify(r)));
+s.renameDoc('笔记本ID', '/文档存储路径.sy', '新标题').then(function(r) { console.log(JSON.stringify(r)) });
 "
 ```
 
-> 需要先获取文档的笔记本 ID 和存储路径：`s.getPathByID('文档ID')`，推荐使用 `rename-doc` CLI 命令自动处理。
+需要先获取文档的笔记本 ID 和存储路径：`s.getPathByID('文档ID')`，推荐使用 `rename-doc` CLI 命令自动处理。
 
 ### 不可用的函数（未导出，不要调用）
 
@@ -785,7 +755,7 @@ s.renameDoc('笔记本ID', '/文档存储路径.sy', '新标题').then(r => cons
 **原因**：传给思源 API 的块 ID 不存在或格式不正确（常见于手工编辑 PMF 时 block id 写错）
 
 **恢复**：
-1. 先 `open-doc "docID" patchable --full > /tmp/doc.pmf` 重新导出基线
+1. 先 `node index.js open-doc "{docID}" patchable --full | tee /tmp/doc.pmf` 重新导出基线
 2. 只保留合法块 ID；新块使用唯一临时 ID（如 `tmp-xxx`）
 3. 再次 `apply-patch`
 
@@ -805,7 +775,7 @@ s.renameDoc('笔记本ID', '/文档存储路径.sy', '新标题').then(r => cons
 
 **PMF 版本冲突**：如果 apply-patch 报 `PMF 版本冲突`，需要重新导出 PMF：
 ```bash
-node index.js open-doc "文档ID" patchable --full > /tmp/doc.pmf
+node index.js open-doc "文档ID" patchable --full | tee /tmp/doc.pmf
 # 重新编辑 PMF 后再 apply-patch
 ```
 
@@ -820,15 +790,9 @@ node index.js open-doc "文档ID" patchable --full > /tmp/doc.pmf
 node index.js open-doc "docID" readable
 
 # 2. 连续写入无需重新读取（每次写入后版本自动刷新）
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
-内容1
-EOF
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
-内容2
-EOF
-SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" <<'EOF'
-内容3
-EOF
+printf '内容1' | SIYUAN_ENABLE_WRITE=true node index.js append-block "docID"
+printf '内容2' | SIYUAN_ENABLE_WRITE=true node index.js append-block "docID"
+printf '内容3' | SIYUAN_ENABLE_WRITE=true node index.js append-block "docID"
 
-# ⚠️ 如果在步骤 1 和 2 之间有其他端修改了文档，会报版本冲突，需要重新 open-doc
+# 注意：如果在步骤 1 和 2 之间有其他端修改了文档，会报版本冲突，需要重新 open-doc
 ```

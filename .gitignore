@@ -48,3 +48,7 @@ package-lock.json
 
 # 运行时缓存
 .siyuan-read-guard-cache.json
+
+test-plan.md
+
+.claude

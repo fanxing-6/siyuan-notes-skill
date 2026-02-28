@@ -89,7 +89,7 @@ Daily notes are document blocks (`type='d'`) with attribute `custom-dailynote-YY
 
 ### Bookmarks
 
-Blocks with attribute `bookmark=<name>` appear in the corresponding bookmark group.
+Blocks with attribute `bookmark={name}` appear in the corresponding bookmark group.
 
 ## Query examples
 
@@ -101,7 +101,7 @@ SELECT * FROM blocks WHERE type='d'
 SELECT * FROM blocks WHERE subtype='h2'
 
 -- Sub-documents of a document
-SELECT * FROM blocks WHERE path LIKE '%/<docID>/%' AND type='d'
+SELECT * FROM blocks WHERE path LIKE '%/{docID}/%' AND type='d'
 
 -- Search paragraphs by keyword
 SELECT * FROM blocks WHERE markdown LIKE '%关键词%' AND type='p'
@@ -110,25 +110,25 @@ ORDER BY updated DESC
 -- Incomplete tasks in last 7 days
 SELECT * FROM blocks
 WHERE type='l' AND subtype='t'
-  AND created > strftime('%Y%m%d%H%M%S', datetime('now', '-7 day'))
+  AND created BETWEEN strftime('%Y%m%d%H%M%S', datetime('now', '-7 day')) AND '99991231235959'
   AND markdown LIKE '* [ ] %'
   AND parent_id NOT IN (SELECT id FROM blocks WHERE subtype='t')
 
 -- Backlinks of a block
 SELECT * FROM blocks WHERE id IN (
-  SELECT block_id FROM refs WHERE def_block_id='<blockID>'
+  SELECT block_id FROM refs WHERE def_block_id='{blockID}'
 ) LIMIT 999
 
 -- Daily notes in a date range
 SELECT DISTINCT B.* FROM blocks AS B
 JOIN attributes AS A ON B.id = A.block_id
 WHERE A.name LIKE 'custom-dailynote-%' AND B.type='d'
-  AND A.value >= '20231010' AND A.value <= '20231013'
+  AND A.value BETWEEN '20231010' AND '20231013'
 ORDER BY A.value DESC
 
 -- Unreferenced documents in a notebook
 SELECT * FROM blocks AS B
-WHERE B.type='d' AND box='<notebookID>'
+WHERE B.type='d' AND box='{notebookID}'
   AND B.id NOT IN (SELECT DISTINCT def_block_id FROM refs)
 ORDER BY updated DESC LIMIT 128
 ```

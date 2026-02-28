@@ -28,6 +28,11 @@ const {
     generateEmbedBlock
 } = require('./format-utils');
 
+// 系统边界检查：确保 Node 18+ 的内置 fetch 可用
+if (typeof globalThis.fetch === 'undefined') {
+    throw new Error('此 skill 需要 Node.js 18+ 的内置 fetch。当前 Node 版本: ' + process.version);
+}
+
 const DEBUG_ARGV_FLAG = process.argv.includes('--debug');
 
 function isDebugModeEnabled() {
