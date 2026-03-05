@@ -1955,6 +1955,9 @@ function inferWritableBlockType(markdown) {
         return 'b';
     }
     if (isTableRowLine(firstLine) && isTableDividerLine(secondLine)) {
+        return 't';
+    }
+    if (/^[-*_]{3,}\s*$/.test(firstLine) && lines.length === 1) {
         return 'tb';
     }
     return 'p';

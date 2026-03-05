@@ -34,6 +34,7 @@ node index.js version-check
 | 在指定位置插入新块 | `insert-block --before/--after`（首选）或 `apply-patch` insert | |
 | 替换章节内容 | `replace-section` | ~~apply-patch 删除+插入~~ |
 | 重构文档（如拆表格） | `replace-section --clear` + `append-block` 逐步重建 | ~~apply-patch 删除旧块+插入新块~~ |
+| 跨章节分散修改多个块 | 编写单个 JS 脚本，循环 `openDocument` → `updateBlock`（同一进程内版本自动刷新） | ~~并行 Bash 调用 update-block（会版本冲突）~~ |
 
 ## Intent Decision Tree
 
@@ -56,6 +57,7 @@ node index.js version-check
 ├─ 替换章节 ──────────→ open-doc patchable → replace-section
 ├─ 重构文档结构 ──────→ open-doc readable → replace-section --clear → append-block 逐步重建
 ├─ 组织文档层级 ──────→ subdoc-analyze-move → move-docs-by-id
+├─ 跨章节分散修改 ────→ 编写单个 JS 脚本，循环 openDocument → updateBlock（见模式8）
 ├─ SQL 高级查询 ──────→ node -e + executeSiyuanQuery()
 └─ 检查连接 ──────────→ check / version
 ```
@@ -76,6 +78,7 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 - `open-doc` 和 `open-section` 计为"已读"；`headings`/`blocks`/`doc-tree` 等不算
 - **核心保护：版本检查（乐观锁）**——写入前对比文档 `updated` 时间戳，若文档在读取后被其他端修改过则拒绝写入
 - 连续写入安全：每次写入成功后自动刷新版本号，`open-doc → write → write → write` 不会误报冲突
+- **⚠️ 版本刷新仅在同一 node 进程内生效**。若用多个独立 Bash 命令（如 Claude Code 并行调用），每次写入会改变文档版本，后续的独立命令会版本冲突。**解决方案**：对同一文档的多次写入必须串行执行，不能并行
 - 读标记持久化存储在磁盘缓存中，跨 CLI 调用有效（同一台机器上的不同终端共享读标记）
 - 读标记超过 3600 秒自动过期（仅作为缓存清理，版本检查才是真正的安全机制）
 - 例外：`create-doc` 与 `rename-doc` 不要求先 `open-doc`
@@ -252,6 +255,49 @@ node index.js open-doc "文档ID" patchable --full | tee /tmp/doc.pmf
 # ⚠️ 输出可能很大，注意上下文限制
 ```
 
+### 8. 跨章节分散修改多个块（单进程批量脚本）
+
+当需要修改同一文档中分散在不同章节的多个块时，**不能**用多个并行 Bash 命令（会版本冲突）。正确做法是编写单个 JS 脚本：
+
+```javascript
+// /tmp/batch_edit.js
+const s = require('/root/.claude/skills/siyuan-notes-skill/index.js');
+async function main() {
+  const docId = '文档ID';
+
+  // 辅助函数：刷新版本 + 更新块（同一进程内版本自动刷新）
+  async function edit(blockId, markdown) {
+    await s.openDocument(docId, 'readable');
+    await s.updateBlock(blockId, markdown);
+    console.log(`Updated ${blockId}: OK`);
+  }
+
+  // 辅助函数：刷新版本 + 在锚点后插入
+  async function insertAfter(previousID, markdown) {
+    await s.openDocument(docId, 'readable');
+    await s.insertBlock(markdown, { previousID });
+    console.log(`Inserted after ${previousID}: OK`);
+  }
+
+  // 依次执行所有修改（必须串行，不能 Promise.all）
+  await edit('块ID1', '新内容1');
+  await edit('块ID2', '新内容2');
+  await insertAfter('锚点块ID', '插入的新内容');
+}
+main().catch(e => { console.error(e.message); process.exit(1); });
+```
+
+```bash
+# 执行
+cd /root/.claude/skills/siyuan-notes-skill
+SIYUAN_ENABLE_WRITE=true node /tmp/batch_edit.js
+```
+
+**关键点**：
+- 所有操作在**同一个 node 进程**内串行执行
+- 每次写入前 `openDocument` 刷新版本号（进程内版本缓存自动更新）
+- JS API 签名：`updateBlock(id, markdown)`、`insertBlock(markdown, { previousID?, nextID?, parentID? })`、`deleteBlock(id)`、`appendMarkdownToBlock(parentID, markdown)`
+
 ## 错误恢复
 
 | 错误 | 原因 | 恢复方法 |
@@ -266,6 +312,7 @@ node index.js open-doc "文档ID" patchable --full | tee /tmp/doc.pmf
 | 文档标题为"未命名文档" | `createDocWithMd` 的 path 参数决定标题 | 用 `create-doc` CLI 命令（自动设置标题）或 `rename-doc` 修正 |
 | 连接失败 | 思源未运行/端口/Token 错误 | `node index.js check` 验证 |
 | search 返回空 | 关键词过短/确实无匹配 | 改用 `search-in-doc` 限定文档范围，或扩大关键词上下文 |
+| 并行写入版本冲突 | 多个独立 Bash 命令并行修改同一文档 | 改用单个 JS 脚本串行执行（见模式8），或每次写入前重新 `open-doc` |
 
 ## Output Guidance
 
@@ -315,8 +362,29 @@ node index.js open-doc "文档ID" patchable --full | tee /tmp/doc.pmf
 - 时间格式 `YYYYMMDDHHmmss`
 - 主要表：`blocks`（块）、`refs`（引用）、`attributes`（属性）
 - 块类型：`d`文档 `h`标题 `p`段落 `l`列表 `c`代码 `t`表格 `m`公式 `b`引述 `s`超级块
+- **⚠️ `tb` 是分割线（thematic break / `---`），不是"表格体"！** 表格的块类型是 `t`
 - 层级：`root_id` → 文档，`parent_id` → 父容器
 - JS API 查询：`s.executeSiyuanQuery('SQL')` 执行查询，`s.formatResults(r)` 格式化输出
+
+## Block Type Reference（思源内核源码 `treenode/node.go`）
+
+| 类型代码 | 节点类型 | 说明 | 是否容器块 |
+|---------|---------|------|-----------|
+| `d` | NodeDocument | 文档 | 是 |
+| `h` | NodeHeading | 标题 | 否 |
+| `p` | NodeParagraph | 段落 | 否 |
+| `l` | NodeList | 列表 | 是 |
+| `i` | NodeListItem | 列表项 | 是 |
+| `c` | NodeCodeBlock | 代码块 | 否 |
+| `m` | NodeMathBlock | 公式块 | 否 |
+| `t` | NodeTable | **表格**（整体为一个块，内部 head/body/row/cell 不是独立块） | 否 |
+| `b` | NodeBlockquote | 引述 | 是 |
+| `s` | NodeSuperBlock | 超级块 | 是 |
+| `tb` | NodeThematicBreak | **分割线**（`---`），⚠️ 不是表格体 | 否 |
+| `html` | NodeHTMLBlock | HTML 块 | 否 |
+| `av` | NodeAttributeView | 属性视图（数据库） | 否 |
+
+**表格结构说明**：思源中表格（`t`）是原子块，内部的 TableHead/TableBody/TableRow/TableCell 是 AST 节点，**没有独立 block ID**。编辑表格只能整体替换，不能操作单个单元格。
 
 ## Notes
 
