@@ -52,6 +52,45 @@ HTTP 请求标头 Authorization: token <YOUR_API_TOKEN>
 - 不要在正式文档、公开仓库或截图里写真实 token，统一写成 `<YOUR_API_TOKEN>`
 - 如果用户只会操作界面，不会理解技术细节，就只让他完成“打开 设置 → 关于 → 复制两段内容”
 
+## 工作目录门禁
+
+支持两个环境变量：
+
+- `SIYUAN_WORKNOTEBOOKS`
+- `SIYUAN_CONFIRMED_WORKNOTEBOOKS`
+
+它们都是“分号分隔的笔记本名称列表”。默认留空表示允许访问全部笔记本。
+
+推荐格式：
+
+```bash
+SIYUAN_WORKNOTEBOOKS=openclaw测试专用
+```
+
+含义：
+
+- 每个元素就是一个工作笔记本名称
+- 多个笔记本用 `;` 分隔
+
+行为：
+
+- 一旦设置了 `SIYUAN_WORKNOTEBOOKS`，工具层会同时对**读取**和**写入**启用门禁
+- 全局列表/搜索类命令会自动过滤到允许范围内
+- 显式访问超出范围的笔记本时，工具会直接报错，而不是继续读取/写入
+- 直接全局 SQL 查询会被拒绝，避免绕过门禁
+
+如果命令返回“工作笔记本门禁”错误：
+
+1. 先向用户明确确认是否允许访问该笔记本
+2. 只有在用户明确确认后，才可在**本次命令前**临时设置 `SIYUAN_CONFIRMED_WORKNOTEBOOKS`
+3. `SIYUAN_CONFIRMED_WORKNOTEBOOKS` 的格式与 `SIYUAN_WORKNOTEBOOKS` 相同
+
+示例：
+
+```bash
+SIYUAN_CONFIRMED_WORKNOTEBOOKS=公开Blog
+```
+
 如需确认是否为最新版本，请运行：
 
 ```bash

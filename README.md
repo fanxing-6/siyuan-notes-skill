@@ -52,7 +52,34 @@ SIYUAN_PORT=6806
 SIYUAN_USE_HTTPS=false
 SIYUAN_API_TOKEN=your-api-token
 SIYUAN_ENABLE_WRITE=false
+SIYUAN_WORKNOTEBOOKS=openclaw测试专用
 ```
+
+### 2.1 工作目录门禁
+
+- `SIYUAN_WORKNOTEBOOKS`：分号分隔的工作笔记本名称列表
+- `SIYUAN_CONFIRMED_WORKNOTEBOOKS`：用户已明确确认后，临时放行的笔记本名称列表
+- 默认留空：允许访问全部笔记本
+
+示例：
+
+```bash
+# 只允许访问一个工作笔记本
+SIYUAN_WORKNOTEBOOKS=openclaw测试专用
+
+# 允许访问多个工作笔记本
+SIYUAN_WORKNOTEBOOKS=openclaw测试专用;个人规划
+
+# 用户确认后，临时放行另一个笔记本
+SIYUAN_CONFIRMED_WORKNOTEBOOKS=公开Blog
+```
+
+行为：
+
+- 设置了 `SIYUAN_WORKNOTEBOOKS` 后，工具层会启用读写门禁
+- 越界读取或写入会直接报错，并明确要求模型先向用户确认该笔记本
+- 全局列表/搜索类命令会自动过滤到允许范围内
+- 直接全局 SQL 查询会被禁止，避免绕过门禁
 
 ### 3. 验证
 

@@ -49,6 +49,8 @@ const {
     SIYUAN_READ_GUARD_WRITE_GRACE_MS,
     SIYUAN_LIST_DOCUMENTS_LIMIT,
     SIYUAN_BLOCK_ROOT_CACHE_MAX,
+    SIYUAN_WORKNOTEBOOKS,
+    SIYUAN_CONFIRMED_WORKNOTEBOOKS,
     READ_GUARD_CACHE_FILE,
     OPEN_DOC_CHAR_LIMIT,
     OPEN_DOC_BLOCK_PAGE_SIZE,
@@ -140,6 +142,18 @@ function getBasicAuthHeader() {
  */
 function escapeSqlValue(value) {
     return String(value).replace(/'/g, "''");
+}
+
+function isWorkdirGateEnabled() {
+    return Array.isArray(SIYUAN_WORKNOTEBOOKS) && SIYUAN_WORKNOTEBOOKS.length > 0;
+}
+
+function getEffectiveWorkNotebookNames() {
+    if (!isWorkdirGateEnabled()) {
+        return [];
+    }
+    const confirmed = Array.isArray(SIYUAN_CONFIRMED_WORKNOTEBOOKS) ? SIYUAN_CONFIRMED_WORKNOTEBOOKS : [];
+    return [...new Set([...SIYUAN_WORKNOTEBOOKS, ...confirmed].map((item) => String(item || '').trim()).filter(Boolean))];
 }
 
 /**
@@ -371,6 +385,7 @@ async function markDocumentRead(docId, source = 'unknown', updatedAt) {
  * @param {string} operation - 操作名
  */
 async function ensureDocumentReadBeforeWrite(docId, operation = 'write') {
+    await ensureDocumentAccessAllowed(docId, operation, 'write');
     if (!SIYUAN_REQUIRE_READ_BEFORE_WRITE) {
         return;
     }
@@ -436,7 +451,7 @@ async function getRootDocIdByBlockId(blockId) {
     }
 
     const safeId = escapeSqlValue(blockId);
-    const rows = await executeSiyuanQuery(`
+        const rows = await executeSiyuanQueryRaw(`
         SELECT id, type, root_id
         FROM blocks
         WHERE id = '${safeId}'
@@ -464,6 +479,7 @@ async function getRootDocIdByBlockId(blockId) {
  * @param {string} operation - 操作名
  */
 async function ensureBlockReadBeforeWrite(blockId, operation = 'write') {
+    await ensureBlockAccessAllowed(blockId, operation, 'write');
     if (!SIYUAN_REQUIRE_READ_BEFORE_WRITE) {
         return;
     }
@@ -788,9 +804,190 @@ async function requestSiyuanMultipartApi(apiPath, formData, options = {}) {
  * @param {string} sqlQuery - SQL查询语句
  * @returns {Promise<Array>} 查询结果
  */
-async function executeSiyuanQuery(sqlQuery) {
+async function executeSiyuanQueryRaw(sqlQuery) {
     const data = await requestSiyuanApi(API_ENDPOINTS.SQL_QUERY, { stmt: sqlQuery }, { requireAuth: true });
     return Array.isArray(data) ? data : [];
+}
+
+async function executeSiyuanQuery(sqlQuery) {
+    if (isWorkdirGateEnabled()) {
+        throw new Error(
+            '工作笔记本门禁: 已设置 SIYUAN_WORKNOTEBOOKS 时，不允许直接执行全局 SQL 查询。\n' +
+            '请改用受门禁保护的高层命令；若用户明确确认需要跨工作笔记本 SQL，请先临时设置 SIYUAN_CONFIRMED_WORKNOTEBOOKS 后再操作。'
+        );
+    }
+    return await executeSiyuanQueryRaw(sqlQuery);
+}
+
+let notebookMetaCache = {
+    ts: 0,
+    notebooks: null
+};
+
+async function listNotebooksRaw() {
+    const now = Date.now();
+    if (notebookMetaCache.notebooks && (now - notebookMetaCache.ts) < 3000) {
+        return notebookMetaCache.notebooks;
+    }
+
+    const data = await requestSiyuanApi(API_ENDPOINTS.NOTEBOOKS, {}, { requireAuth: true });
+    let notebooks = [];
+    if (Array.isArray(data)) {
+        notebooks = data;
+    } else if (data && Array.isArray(data.notebooks)) {
+        notebooks = data.notebooks;
+    }
+
+    notebookMetaCache = {
+        ts: now,
+        notebooks
+    };
+    return notebooks;
+}
+
+async function notebookMatchesWorkNotebookName(targetNotebookName, notebookId) {
+    const target = String(targetNotebookName || '').trim();
+    if (!target || !notebookId) {
+        return false;
+    }
+
+    const notebooks = await listNotebooksRaw();
+    const notebook = notebooks.find((item) => item.id === notebookId);
+    return notebook?.name === target;
+}
+
+async function isNotebookHPathAllowed(notebookId, hpathValue = '/') {
+    if (!isWorkdirGateEnabled()) {
+        return true;
+    }
+
+    const notebookNames = getEffectiveWorkNotebookNames();
+    for (const notebookName of notebookNames) {
+        if (await notebookMatchesWorkNotebookName(notebookName, notebookId)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+async function buildNotebookLabel(notebookId) {
+    const notebooks = await listNotebooksRaw();
+    const notebook = notebooks.find((item) => item.id === notebookId);
+    return notebook ? `${notebook.name} (${notebook.id})` : notebookId;
+}
+
+async function buildWorkdirGateMessage({ operation, accessType, notebookId, hpath }) {
+    const notebookLabel = await buildNotebookLabel(notebookId);
+    return [
+        `工作笔记本门禁: 当前 ${accessType === 'write' ? '写入' : '读取'} 操作 ${operation} 试图访问未授权工作笔记本。`,
+        `目标笔记本: ${notebookLabel}`,
+        `目标目录: ${String(hpath || '/').trim() || '/'}`,
+        '请先向用户明确确认是否允许访问该笔记本。',
+        '若用户确认，可在本次命令前临时设置 SIYUAN_CONFIRMED_WORKNOTEBOOKS 后重试，格式与 SIYUAN_WORKNOTEBOOKS 相同。'
+    ].join('\n');
+}
+
+async function ensureNotebookHPathAllowed(notebookId, hpathValue = '/', operation = 'read', accessType = 'read') {
+    if (!isWorkdirGateEnabled()) {
+        return;
+    }
+
+    assertNonEmptyString(notebookId, 'notebookId');
+    const allowed = await isNotebookHPathAllowed(notebookId, hpathValue);
+    if (allowed) {
+        return;
+    }
+
+    throw new Error(await buildWorkdirGateMessage({
+        operation,
+        accessType,
+        notebookId,
+        hpath: hpathValue
+    }));
+}
+
+async function getDocumentNotebookAndHPathByPath(notebookId, docPath) {
+    const rows = await executeSiyuanQueryRaw(`
+        SELECT id, box, hpath
+        FROM blocks
+        WHERE type = 'd'
+        AND box = '${escapeSqlValue(notebookId)}'
+        AND path = '${escapeSqlValue(docPath)}'
+        LIMIT 1
+    `);
+    const row = rows[0] || {};
+    return {
+        notebook: row.box || notebookId,
+        hpath: row.hpath || '/'
+    };
+}
+
+async function ensureDocumentAccessAllowed(docId, operation = 'read', accessType = 'read') {
+    if (!isWorkdirGateEnabled()) {
+        return;
+    }
+
+    assertNonEmptyString(docId, 'docId');
+    const pathInfo = await getPathByID(docId);
+    const hpath = await getHPathByID(docId);
+    await ensureNotebookHPathAllowed(pathInfo.notebook, hpath || '/', operation, accessType);
+}
+
+async function ensureBlockAccessAllowed(blockId, operation = 'read', accessType = 'read') {
+    if (!isWorkdirGateEnabled()) {
+        return;
+    }
+
+    assertNonEmptyString(blockId, 'blockId');
+    const rootDocId = await getRootDocIdByBlockId(blockId);
+    await ensureDocumentAccessAllowed(rootDocId, operation, accessType);
+}
+
+async function resolveRowWorkdirMeta(row) {
+    if (!row || typeof row !== 'object') {
+        return null;
+    }
+
+    const notebookId = String(row.box || row.notebook || '').trim();
+    const hpath = String(row.hpath || '').trim();
+    if (notebookId && hpath) {
+        return {
+            notebookId,
+            hpath
+        };
+    }
+
+    const docId = isLikelyBlockId(row.type === 'd' ? row.id : row.root_id)
+        ? (row.type === 'd' ? row.id : row.root_id)
+        : '';
+    if (!docId) {
+        return null;
+    }
+
+    const pathInfo = await getPathByID(docId);
+    return {
+        notebookId: pathInfo.notebook,
+        hpath: await getHPathByID(docId)
+    };
+}
+
+async function filterRowsByWorkdir(rows) {
+    if (!isWorkdirGateEnabled() || !Array.isArray(rows)) {
+        return rows;
+    }
+
+    const filtered = [];
+    for (const row of rows) {
+        const meta = await resolveRowWorkdirMeta(row);
+        if (!meta) {
+            continue;
+        }
+        if (await isNotebookHPathAllowed(meta.notebookId, meta.hpath || '/')) {
+            filtered.push(row);
+        }
+    }
+    return filtered;
 }
 
 /**
@@ -884,6 +1081,12 @@ async function getPathByID(id) {
 async function listDocsByPath(notebook, pathValue = '/') {
     assertNonEmptyString(notebook, 'notebook');
     const normalizedPath = typeof pathValue === 'string' && pathValue.trim() ? pathValue.trim() : '/';
+    let scopeHPath = normalizedPath;
+    if (normalizedPath !== '/' && normalizedPath.endsWith('.sy')) {
+        const scope = await getDocumentNotebookAndHPathByPath(notebook, normalizedPath);
+        scopeHPath = scope.hpath || '/';
+    }
+    await ensureNotebookHPathAllowed(notebook, scopeHPath, 'listDocsByPath', 'read');
 
     const data = await requestSiyuanApi(API_ENDPOINTS.LIST_DOCS_BY_PATH, {
         notebook,
@@ -1025,6 +1228,7 @@ async function getDocumentTreeByID(docId, maxDepth = 4) {
     if (!isLikelyBlockId(docId)) {
         throw new Error('docId 格式不正确');
     }
+    await ensureDocumentAccessAllowed(docId, 'getDocumentTreeByID', 'read');
 
     const docType = await getBlockTypeById(docId);
     if (docType !== 'd') {
@@ -1223,6 +1427,11 @@ async function moveDocsByID(fromIDs, toID) {
  */
 async function planMoveDocsByID(toID, fromIDs) {
     const target = await resolveMoveTarget(toID);
+    if (target.kind === 'doc') {
+        await ensureDocumentAccessAllowed(target.id, 'planMoveDocsByID(target)', 'write');
+    } else {
+        await ensureNotebookHPathAllowed(target.notebook, '/', 'planMoveDocsByID(target)', 'write');
+    }
     if (!Array.isArray(fromIDs) || fromIDs.length === 0) {
         throw new Error('fromIDs 不能为空');
     }
@@ -1242,6 +1451,7 @@ async function planMoveDocsByID(toID, fromIDs) {
         if (!isLikelyBlockId(id)) {
             throw new Error(`文档ID格式不正确: ${id}`);
         }
+        await ensureDocumentAccessAllowed(id, 'planMoveDocsByID(source)', 'write');
 
         const type = await getBlockTypeById(id);
         if (type !== 'd') {
@@ -1431,16 +1641,18 @@ async function analyzeSubdocMovePlan(toID, fromIDs, maxDepth = 5) {
  * @returns {Promise<Array>} 笔记本列表
  */
 async function listNotebooks() {
-    const data = await requestSiyuanApi(API_ENDPOINTS.NOTEBOOKS, {}, { requireAuth: true });
-    if (Array.isArray(data)) {
-        return data;
+    const notebooks = await listNotebooksRaw();
+    if (!isWorkdirGateEnabled()) {
+        return notebooks;
     }
 
-    if (data && Array.isArray(data.notebooks)) {
-        return data.notebooks;
+    const filtered = [];
+    for (const notebook of notebooks) {
+        if (await isNotebookHPathAllowed(notebook.id, '/')) {
+            filtered.push(notebook);
+        }
     }
-
-    return [];
+    return filtered;
 }
 
 /**
@@ -1454,6 +1666,7 @@ async function createDocWithMd(notebook, pathValue, markdown = '') {
     ensureWriteEnabled();
     assertNonEmptyString(notebook, 'notebook');
     assertNonEmptyString(pathValue, 'path');
+    await ensureNotebookHPathAllowed(notebook, pathValue, 'createDocWithMd', 'write');
 
     const rawData = await requestSiyuanApi(API_ENDPOINTS.CREATE_DOC_WITH_MD, {
         notebook,
@@ -1482,6 +1695,8 @@ async function renameDoc(notebook, docPath, title) {
     assertNonEmptyString(notebook, 'notebook');
     assertNonEmptyString(docPath, 'path');
     assertNonEmptyString(title, 'title');
+    const scope = await getDocumentNotebookAndHPathByPath(notebook, docPath);
+    await ensureNotebookHPathAllowed(scope.notebook, scope.hpath, 'renameDoc', 'write');
 
     const rawData = await requestSiyuanApi(API_ENDPOINTS.RENAME_DOC, {
         notebook,
@@ -1515,6 +1730,7 @@ async function getBlockAttrs(id) {
  */
 async function getChildBlocks(id) {
     assertNonEmptyString(id, 'id');
+    await ensureBlockAccessAllowed(id, 'getChildBlocks', 'read');
     const data = await requestSiyuanApi(API_ENDPOINTS.GET_CHILD_BLOCKS, { id }, { requireAuth: true });
 
     if (Array.isArray(data)) {
@@ -1535,7 +1751,7 @@ async function getChildBlocks(id) {
  */
 async function getBlockTypeById(id) {
     const safeId = escapeSqlValue(id);
-    const rows = await executeSiyuanQuery(`
+    const rows = await executeSiyuanQueryRaw(`
         SELECT type
         FROM blocks
         WHERE id = '${safeId}'
@@ -1559,6 +1775,7 @@ async function appendBlock(parentID, markdown) {
     ensureWriteEnabled();
     assertNonEmptyString(parentID, 'parentID');
     assertNonEmptyString(markdown, 'markdown');
+    await ensureBlockAccessAllowed(parentID, 'appendBlock', 'write');
     await ensureBlockReadBeforeWrite(parentID, 'appendBlock');
     const rawData = await requestSiyuanApi(API_ENDPOINTS.APPEND_BLOCK, {
         parentID,
@@ -1599,6 +1816,7 @@ async function insertBlock(markdown, anchors = {}) {
 
     const guardAnchors = new Set([parentID, previousID, nextID].filter(Boolean));
     for (const anchorId of guardAnchors) {
+        await ensureBlockAccessAllowed(anchorId, 'insertBlock', 'write');
         await ensureBlockReadBeforeWrite(anchorId, 'insertBlock');
     }
 
@@ -1633,6 +1851,7 @@ async function insertBlock(markdown, anchors = {}) {
 async function moveBlock(id, anchors = {}) {
     ensureWriteEnabled();
     assertNonEmptyString(id, 'id');
+    await ensureBlockAccessAllowed(id, 'moveBlock', 'write');
     await ensureBlockReadBeforeWrite(id, 'moveBlock');
 
     const parentID = typeof anchors.parentID === 'string' ? anchors.parentID.trim() : '';
@@ -1974,7 +2193,7 @@ function inferWritableBlockType(markdown) {
 
 async function getBlockSnapshotById(id) {
     const safeId = escapeSqlValue(id);
-    const rows = await executeSiyuanQuery(`
+    const rows = await executeSiyuanQueryRaw(`
         SELECT id, type, subtype, root_id, parent_id, markdown
         FROM blocks
         WHERE id = '${safeId}'
@@ -2228,7 +2447,7 @@ async function getSectionChildBlockIds(headingBlockId) {
 
     // 获取标题的 subtype (h1-h6)
     const safeId = escapeSqlValue(headingBlockId);
-    const rows = await executeSiyuanQuery(`SELECT subtype FROM blocks WHERE id = '${safeId}' LIMIT 1`);
+    const rows = await executeSiyuanQueryRaw(`SELECT subtype FROM blocks WHERE id = '${safeId}' LIMIT 1`);
     const headingSubtype = rows?.[0]?.subtype || '';
 
     const childBlocks = await getChildBlocks(headingBlockId);
@@ -2292,6 +2511,7 @@ async function mapWithConcurrency(items, concurrency, mapper) {
  * @returns {Promise<string>} 渲染后的文本
  */
 async function openSection(headingBlockId, view = 'readable') {
+    await ensureBlockAccessAllowed(headingBlockId, 'openSection', 'read');
     const section = await getSectionChildBlockIds(headingBlockId);
     await markDocumentRead(section.rootDocId, 'openSection');
 
@@ -2498,21 +2718,8 @@ async function appendMarkdownToBlock(parentBlockId, markdown) {
     };
 }
 
-const {
-    searchNotes,
-    searchInDocument,
-    listDocuments,
-    searchByTag,
-    getBacklinks,
-    searchTasks,
-    getDailyNotes,
-    searchByAttribute,
-    getBookmarks,
-    getRandomHeading,
-    getRecentBlocks,
-    getUnreferencedDocuments
-} = createQueryServices({
-    executeSiyuanQuery,
+const baseQueryServices = createQueryServices({
+    executeSiyuanQuery: executeSiyuanQueryRaw,
     escapeSqlValue,
     normalizeInt,
     assertNonEmptyString,
@@ -2520,10 +2727,65 @@ const {
     listDocumentsLimit: SIYUAN_LIST_DOCUMENTS_LIMIT
 });
 
+async function searchNotes(keyword, limit = 20, blockType = null) {
+    return await filterRowsByWorkdir(await baseQueryServices.searchNotes(keyword, limit, blockType));
+}
+
+async function searchInDocument(docId, keyword, limit = 20) {
+    await ensureDocumentAccessAllowed(docId, 'searchInDocument', 'read');
+    return await baseQueryServices.searchInDocument(docId, keyword, limit);
+}
+
+async function listDocuments(notebookId = null, limit = SIYUAN_LIST_DOCUMENTS_LIMIT) {
+    if (notebookId) {
+        await ensureNotebookHPathAllowed(notebookId, '/', 'listDocuments', 'read');
+    }
+    return await filterRowsByWorkdir(await baseQueryServices.listDocuments(notebookId, limit));
+}
+
+async function searchByTag(tag, limit = 20) {
+    return await filterRowsByWorkdir(await baseQueryServices.searchByTag(tag, limit));
+}
+
+async function getBacklinks(defBlockId, limit = 999) {
+    await ensureBlockAccessAllowed(defBlockId, 'getBacklinks', 'read');
+    return await filterRowsByWorkdir(await baseQueryServices.getBacklinks(defBlockId, limit));
+}
+
+async function searchTasks(status = '[ ]', days = 7, limit = 50) {
+    return await filterRowsByWorkdir(await baseQueryServices.searchTasks(status, days, limit));
+}
+
+async function getDailyNotes(startDate, endDate) {
+    return await filterRowsByWorkdir(await baseQueryServices.getDailyNotes(startDate, endDate));
+}
+
+async function searchByAttribute(attrName, attrValue = null, limit = 20) {
+    return await filterRowsByWorkdir(await baseQueryServices.searchByAttribute(attrName, attrValue, limit));
+}
+
+async function getBookmarks(bookmarkName = null) {
+    return await filterRowsByWorkdir(await baseQueryServices.getBookmarks(bookmarkName));
+}
+
+async function getRandomHeading(rootId) {
+    await ensureDocumentAccessAllowed(rootId, 'getRandomHeading', 'read');
+    return await baseQueryServices.getRandomHeading(rootId);
+}
+
+async function getRecentBlocks(days = 7, orderBy = 'updated', blockType = null, limit = 50) {
+    return await filterRowsByWorkdir(await baseQueryServices.getRecentBlocks(days, orderBy, blockType, limit));
+}
+
+async function getUnreferencedDocuments(notebookId, limit = 128) {
+    await ensureNotebookHPathAllowed(notebookId, '/', 'getUnreferencedDocuments', 'read');
+    return await filterRowsByWorkdir(await baseQueryServices.getUnreferencedDocuments(notebookId, limit));
+}
+
 async function queryDocumentBlockRows(rootId) {
     assertNonEmptyString(rootId, 'rootId');
     const safeRootId = escapeSqlValue(rootId);
-    return await executeSiyuanQuery(`
+    return await executeSiyuanQueryRaw(`
         SELECT id, content, markdown, type, subtype, created, updated, parent_id, ial
         FROM blocks
         WHERE root_id = '${safeRootId}'
@@ -2578,6 +2840,7 @@ async function getDocumentBlocksInTreeOrder(rootId) {
 }
 
 async function getDocumentHeadings(rootId, headingType = null) {
+    await ensureDocumentAccessAllowed(rootId, 'getDocumentHeadings', 'read');
     const blocks = await getDocumentBlocksInTreeOrder(rootId);
     return blocks.filter((block) => {
         if (block.type !== 'h') {
@@ -2591,6 +2854,7 @@ async function getDocumentHeadings(rootId, headingType = null) {
 }
 
 async function getDocumentBlocks(rootId, blockType = null) {
+    await ensureDocumentAccessAllowed(rootId, 'getDocumentBlocks', 'read');
     const blocks = await getDocumentBlocksInTreeOrder(rootId);
     if (!blockType) {
         return blocks;
@@ -2634,7 +2898,7 @@ const ATTRIBUTE_VIEW_API_SPECS = {
 async function resolveAttributeViewHostBlocks(avID) {
     assertNonEmptyString(avID, 'avID');
     const marker = escapeSqlValue(`data-av-id="${avID}"`);
-    const rows = await executeSiyuanQuery(`
+    const rows = await executeSiyuanQueryRaw(`
         SELECT id, root_id, box, path, hpath, updated
         FROM blocks
         WHERE type = 'av'
@@ -2689,6 +2953,49 @@ async function collectAttributeViewWriteDocIds(payload, operationName) {
     return Array.from(docIds);
 }
 
+function getAttributeViewIdForOperation(operationName, payload = {}) {
+    if (typeof payload.avID === 'string' && payload.avID.trim()) {
+        return payload.avID.trim();
+    }
+
+    const idBasedOperations = new Set([
+        'renderAttributeView',
+        'getAttributeView',
+        'getAttributeViewKeys',
+        'getAttributeViewPrimaryKeyValues'
+    ]);
+    if (idBasedOperations.has(operationName) && typeof payload.id === 'string' && payload.id.trim()) {
+        return payload.id.trim();
+    }
+
+    return '';
+}
+
+async function ensureAttributeViewAccessAllowed(operationName, payload = {}, accessType = 'read') {
+    if (!isWorkdirGateEnabled()) {
+        return;
+    }
+
+    const avID = getAttributeViewIdForOperation(operationName, payload);
+    if (!avID) {
+        if (typeof payload.blockID === 'string' && payload.blockID.trim()) {
+            await ensureBlockAccessAllowed(payload.blockID.trim(), `av/${operationName}`, accessType);
+        }
+        if (typeof payload.id === 'string' && payload.id.trim() && isLikelyBlockId(payload.id.trim())) {
+            await ensureBlockAccessAllowed(payload.id.trim(), `av/${operationName}`, accessType);
+        }
+        return;
+    }
+
+    const hosts = await resolveAttributeViewHostBlocks(avID);
+    if (hosts.length === 0) {
+        return;
+    }
+    for (const host of hosts) {
+        await ensureBlockAccessAllowed(host.blockId, `av/${operationName}`, accessType);
+    }
+}
+
 async function callAttributeViewApi(operationName, payload = {}) {
     const spec = ATTRIBUTE_VIEW_API_SPECS[operationName];
     if (!spec) {
@@ -2696,6 +3003,7 @@ async function callAttributeViewApi(operationName, payload = {}) {
     }
 
     const safePayload = payload && typeof payload === 'object' ? payload : {};
+    await ensureAttributeViewAccessAllowed(operationName, safePayload, spec.write ? 'write' : 'read');
     let touchedDocIds = [];
     if (spec.write) {
         touchedDocIds = await collectAttributeViewWriteDocIds(safePayload, `av/${operationName}`);
@@ -3445,7 +3753,7 @@ function buildAttributeViewAssetCellValue(baseValue, keyID, itemID, assets, { cl
 
 async function getBlockCellSourceInfo(blockId) {
     assertNonEmptyString(blockId, 'blockId');
-    const rows = await executeSiyuanQuery(`
+    const rows = await executeSiyuanQueryRaw(`
         SELECT id, content
         FROM blocks
         WHERE id = '${escapeSqlValue(blockId)}'
@@ -3525,6 +3833,7 @@ async function getAttributeViewViewDetails(avID, viewID) {
 
 async function discoverAttributeViewsInDocument(docId) {
     assertNonEmptyString(docId, 'docId');
+    await ensureDocumentAccessAllowed(docId, 'discoverAttributeViewsInDocument', 'read');
     const blocks = await getDocumentBlocks(docId);
     const results = [];
     for (const block of blocks) {
@@ -3694,7 +4003,7 @@ async function addAttributeViewDocRows(avID, docIds, options = {}) {
     }
 
     const safeIds = uniqueDocIds.map((id) => `'${escapeSqlValue(id)}'`).join(', ');
-    const rows = await executeSiyuanQuery(`
+    const rows = await executeSiyuanQueryRaw(`
         SELECT id, type
         FROM blocks
         WHERE id IN (${safeIds})
@@ -4533,7 +4842,7 @@ async function addAttributeViewBlockRows(avID, blockIds, options = {}) {
     }
 
     const safeIds = uniqueBlockIds.map((id) => `'${escapeSqlValue(id)}'`).join(', ');
-    const rows = await executeSiyuanQuery(`
+    const rows = await executeSiyuanQueryRaw(`
         SELECT id
         FROM blocks
         WHERE id IN (${safeIds})
@@ -4682,7 +4991,7 @@ async function checkConnection() {
     }
 
     try {
-        const result = await executeSiyuanQuery('SELECT 1 as test');
+        const result = await executeSiyuanQueryRaw('SELECT 1 as test');
         return result && result.length > 0;
     } catch (error) {
         console.error('思源笔记连接检查失败:', error.message);
@@ -4950,7 +5259,7 @@ if (require.main === module) {
  */
 async function getDocumentMeta(docId) {
     const safeDocId = escapeSqlValue(docId);
-    const rows = await executeSiyuanQuery(`
+    const rows = await executeSiyuanQueryRaw(`
         SELECT id, content, hpath, created, updated
         FROM blocks
         WHERE id = '${safeDocId}'
@@ -5061,6 +5370,7 @@ function renderSearchResultsMarkdown({ query, results, limit }) {
  */
 async function openDocumentReadableView(docId, options = {}) {
     const limitChars = normalizeInt(options.limitChars, OPEN_DOC_CHAR_LIMIT, 1000, 1000000);
+    await ensureDocumentAccessAllowed(docId, 'openDocumentReadableView', 'read');
 
     const [meta, exported] = await Promise.all([
         getDocumentMeta(docId),
@@ -5156,6 +5466,7 @@ async function openDocumentReadableView(docId, options = {}) {
 async function openDocumentPatchableView(docId, options = {}) {
     const limitBlocks = normalizeInt(options.limitBlocks, OPEN_DOC_BLOCK_PAGE_SIZE, 5, 10000);
     const cursor = typeof options.cursor === 'string' ? options.cursor.trim() : '';
+    await ensureDocumentAccessAllowed(docId, 'openDocumentPatchableView', 'read');
 
     const [meta, allBlocks] = await Promise.all([
         getDocumentMeta(docId),
