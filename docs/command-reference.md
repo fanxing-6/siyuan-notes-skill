@@ -5,6 +5,10 @@
 运行前提：cwd 必须是 skill 目录（即 `index.js` 所在目录）。
 若上层进程已注入 `SIYUAN_*` 环境变量，则无需创建 `.env`；若环境变量不可继承，再按提示创建 `.env`。不要在输出中打印完整 token。
 
+数据库高层操作请优先阅读 `docs/database-operations.md`，其中已经覆盖 relation / rollup / filters / sorts / groups / views / gallery / kanban / 资源字段。
+
+如果你只有数据库宿主文档 ID，不知道 `avID`，先用 `av-discover`。
+
 ---
 
 ## 读取命令
@@ -146,6 +150,8 @@ node index.js headings {文档ID} [级别]
 
 **返回**：格式化文本
 
+**顺序保证**：按文档当前真实树顺序返回，不按块创建时间排序。标题被移动后，输出顺序仍与文档中的可见顺序一致。
+
 ---
 
 ### blocks — 文档子块
@@ -163,6 +169,8 @@ node index.js blocks {文档ID} [块类型]
 
 若块 markdown 含图片语法（如 `![alt](...)`），摘要会标记 `[img]`，方便 grep 定位图片块。
 
+**顺序保证**：按文档当前真实树顺序返回，不按块创建时间排序。
+
 ---
 
 ### doc-children — 子文档列表
@@ -177,6 +185,8 @@ node index.js doc-children {笔记本ID} [路径]
 | 路径 | 否 | `/` | 文件存储路径 |
 
 **返回**：编号列表，含文档名、ID、路径、子文档数
+
+实现上会显式请求完整子文档列表，不继承思源 `listDocsByPath` 的默认列表上限。
 
 ---
 
@@ -194,6 +204,8 @@ node index.js doc-tree {笔记本ID} [路径] [深度]
 
 **返回**：缩进 Markdown 树
 
+实现上会显式请求完整子文档列表，不继承思源 `listDocsByPath` 的默认列表上限。
+
 ---
 
 ### doc-tree-id — 以文档 ID 展示子文档树
@@ -208,6 +220,8 @@ node index.js doc-tree-id {文档ID} [深度]
 | 深度 | 否 | 4 | 最大展开层级（1-10） |
 
 **返回**：缩进 Markdown 树
+
+实现上会显式请求完整子文档列表，不继承思源 `listDocsByPath` 的默认列表上限。
 
 ---
 
@@ -354,6 +368,35 @@ node index.js version-check
 
 **例外**：`create-doc` 和 `rename-doc` 不需要先 `open-doc`（因为文档可能尚未创建或不需要读取内容）
 
+### 统一写入回执
+
+本 skill 的写命令统一返回结构化回执，不再把上游 `null` 或底层事务数组直接暴露给调用方。
+
+典型格式：
+
+```json
+{
+  "success": true,
+  "state": "applied",
+  "operation": "insertBlock",
+  "request": {
+    "parentID": "20260320153008-znw44xw",
+    "dataType": "markdown",
+    "markdownLength": 4
+  }
+}
+```
+
+常见字段：
+
+- `success=true`：skill 已确认成功
+- `state="applied"`：写操作已落到内核
+- `operation`：高层操作名
+- `request`：关键请求参数摘要
+- `touchedDocIds`：被本次写操作影响并刷新过版本的文档
+- `rawData`：上游原始返回，仅用于调试
+- `rawResultType`：`empty` / `string` / `transaction_array` / `object`
+
 ### create-doc — 创建新文档
 
 ```bash
@@ -366,7 +409,7 @@ node index.js create-doc {笔记本ID} {标题}
 | 标题 | 是 | 文档标题（自动作为文档路径 `/标题`） |
 | stdin | 否 | 文档初始内容（仅支持 stdin；不提供则创建空文档） |
 
-**返回**：JSON，含新文档 ID
+**返回**：JSON，含统一写入回执与 `docId`
 
 **常见用法：**
 ```bash
@@ -424,7 +467,7 @@ node index.js rename-doc {文档ID} {新标题}
 | 文档ID | 是 | 要重命名的文档 ID |
 | 新标题 | 是 | 新的文档标题 |
 
-**返回**：JSON
+**返回**：JSON，含统一写入回执
 
 **常见用法：**
 ```bash
@@ -446,7 +489,7 @@ node index.js append-block {父块ID}
 | 父块ID | 是 | 追加到哪个块下。文档 ID → 追加到文档末尾；标题块 ID → 追加到该标题的章节内 |
 | stdin | 是 | 要追加的 Markdown 内容（仅支持 stdin） |
 
-**返回**：JSON
+**返回**：JSON，含统一写入回执和 `insertedBlockId`
 
 **常见用法：**
 ```bash
@@ -513,7 +556,7 @@ node index.js replace-section {标题块ID} --clear
 
 **行为**：删除标题下所有子块 → 追加新内容。**标题块本身保留不变**，所以新 Markdown 内容**不要重复标题**（例如标题是 `## 第一章`，新内容应直接是正文段落、列表等，而不是再写一个 `## ...`）。
 
-**返回**：JSON，含删除的块 ID 列表和追加结果
+**返回**：JSON，含 `success/state/operation`、删除的块 ID 列表和追加结果
 
 ---
 
@@ -528,7 +571,7 @@ cat /tmp/doc.pmf | node index.js apply-patch {文档ID}
 | 文档ID | 是 | 必须与 PMF 文件中的 doc id 匹配 |
 | stdin | 是 | PMF 格式文本 |
 
-**返回**：JSON，含 `plan.summary` 和 `execution`
+**返回**：JSON，含 `success/state/operation`、`plan.summary` 和 `execution`
 
 **支持范围：update / delete / reorder / insert。** 详见 [docs/pmf-spec.md](pmf-spec.md)。
 
@@ -549,14 +592,12 @@ node index.js update-block {块ID}
 | 块ID | 是 | 要更新的块 ID |
 | stdin | 是 | 新的块内容（仅支持 stdin）。若内容可解析为多块，将自动切换为结构化写入 |
 
-**返回**：JSON
+**返回**：JSON，含统一写入回执
 
-- 单块输入：返回思源 `/api/block/updateBlock` 原始结果（数组）
-- 多块输入：返回结构化结果（对象）
-  - `mode: "structured-update"`
-  - `summary.inputBlockCount / summary.insertedCount`
-  - `updated`（首块 update 结果）
-  - `inserted[]`（后续 insert 结果）
+- 单块输入：`mode: "single-block-update"`
+- 多块输入：`mode: "structured-update"`
+- 文档根块：`mode: "document-root-update"`
+- 多块输入时，`updated` 和 `inserted[]` 也都是结构化回执
 
 **常见用法：**
 ```bash
@@ -609,7 +650,7 @@ node index.js delete-block {块ID}
 |------|------|------|
 | 块ID | 是 | 要删除的块 ID |
 
-**返回**：JSON
+**返回**：JSON，含统一写入回执
 
 **常见用法：**
 ```bash
@@ -730,6 +771,8 @@ s.createDocWithMd('笔记本ID', '/文档标题', '初始 Markdown').then(functi
 
 `path` 参数的最后一段即为文档标题。例如 `/父文档/子标题` 会在"父文档"下创建名为"子标题"的文档。
 
+返回对象里的新文档 ID 位于 `r.docId`。
+
 ### 重命名文档（JS API）
 
 ```bash
@@ -740,6 +783,8 @@ s.renameDoc('笔记本ID', '/文档存储路径.sy', '新标题').then(function(
 ```
 
 需要先获取文档的笔记本 ID 和存储路径：`s.getPathByID('文档ID')`，推荐使用 `rename-doc` CLI 命令自动处理。
+
+即使上游内核原始返回为 `null`，这里仍会返回统一写入回执。
 
 ### 不可用的函数（未导出，不要调用）
 
@@ -796,3 +841,78 @@ printf '内容3' | SIYUAN_ENABLE_WRITE=true node index.js append-block "docID"
 
 # 注意：如果在步骤 1 和 2 之间有其他端修改了文档，会报版本冲突，需要重新 open-doc
 ```
+
+---
+
+## 数据库与资源命令
+
+### 数据库写入锁
+
+- 所有会修改数据库结构、视图、行、单元格的 `av-*` 写命令，都会复用读后写围栏
+- 正确顺序：先 `open-doc "{数据库所在文档ID}" readable|patchable`，再执行 `av-add-key` / `av-add-rows` / `av-set-cell` / `av-change-layout`
+- `av-get` / `av-render` / `av-keys` / `av-primary-keys` 这类只读命令不要求先读
+
+### 常用数据库命令
+
+```bash
+# 获取数据库定义
+node index.js av-get "{avID}"
+
+# 渲染数据库视图
+node index.js av-render "{avID}"
+
+# 添加文本字段
+SIYUAN_ENABLE_WRITE=true node index.js av-add-key "{avID}" "{keyID}" "客户名称" text
+
+# 新增 Detached row
+printf '%s\n' '[{"itemID":"20260319000000-row0001","id":"20260319000000-block001","isDetached":true,"content":""}]' \
+  | SIYUAN_ENABLE_WRITE=true node index.js av-add-rows "{avID}"
+
+# 更新文本单元格
+printf '%s\n' '{"id":"cell-id","keyID":"key-id","blockID":"row-id","type":"text","text":{"content":"ACME Corp"}}' \
+  | SIYUAN_ENABLE_WRITE=true node index.js av-set-cell "{avID}" "{keyID}" "{rowID}"
+
+# 切换视图布局
+SIYUAN_ENABLE_WRITE=true node index.js av-change-layout "{数据库块ID}" "{avID}" table
+SIYUAN_ENABLE_WRITE=true node index.js av-change-layout "{数据库块ID}" "{avID}" gallery
+SIYUAN_ENABLE_WRITE=true node index.js av-change-layout "{数据库块ID}" "{avID}" kanban
+
+# 添加并配置 relation 字段（双向）
+SIYUAN_ENABLE_WRITE=true node index.js av-add-relation-key "{源AVID}" "{键ID}" "关联客户" "{目标AVID}" --two-way --back-name "来源记录"
+
+# 添加并配置 rollup 字段
+SIYUAN_ENABLE_WRITE=true node index.js av-add-rollup-key "{AVID}" "{键ID}" "预算汇总" "{关系字段ID}" "{目标字段ID}" --calc "Sum"
+
+# 设置 relation 单元格
+SIYUAN_ENABLE_WRITE=true node index.js av-set-relation-cell "{AVID}" "{键ID}" "{项ID}" "{目标AVID}" "{目标项ID1},{目标项ID2}"
+```
+
+### 支持的数据库字段类型
+
+- `text`
+- `number`
+- `date`
+- `select`
+- `checkbox`
+- `relation`
+- `rollup`
+
+### 资源上传
+
+```bash
+SIYUAN_ENABLE_WRITE=true node index.js asset-upload /tmp/demo.png /tmp/spec.pdf
+```
+
+### 上传并插入到文档
+
+```bash
+node index.js open-doc "{docID}" readable
+
+SIYUAN_ENABLE_WRITE=true node index.js asset-insert --parent "{docID}" /tmp/demo.png /tmp/spec.pdf
+SIYUAN_ENABLE_WRITE=true node index.js asset-insert --parent "{docID}" --mode link /tmp/spec.pdf
+SIYUAN_ENABLE_WRITE=true node index.js asset-insert --parent "{docID}" --mode iframe /tmp/spec.pdf
+SIYUAN_ENABLE_WRITE=true node index.js asset-embed-pdf --parent "{docID}" /tmp/spec.pdf
+```
+
+- `asset-upload` 只修改 assets，不要求先读取文档
+- `asset-insert` 会改文档内容，因此必须先 `open-doc`

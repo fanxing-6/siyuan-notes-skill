@@ -35,9 +35,11 @@ claude mcp add-skill https://github.com/fanxing-6/siyuan-notes-skill
 在技能目录创建 `.env` 文件（或设置环境变量）：
 
 ```bash
-SIYUAN_SERVER=http://127.0.0.1:6806
-SIYUAN_TOKEN=your-api-token
-SIYUAN_ENABLE_WRITE=false   # 设为 true 启用写入操作
+SIYUAN_HOST=127.0.0.1
+SIYUAN_PORT=6806
+SIYUAN_USE_HTTPS=false
+SIYUAN_API_TOKEN=your-api-token
+SIYUAN_ENABLE_WRITE=false
 ```
 
 ### 3. 验证
@@ -70,22 +72,27 @@ node -e "const s = require('./index.js'); s.executeSiyuanQuery('SELECT * FROM bl
 
 | 页面 | 说明 |
 |------|------|
-| [命令参考](Command-Reference) | 所有命令的参数、默认值和示例 |
-| [写入安全协议](Write-Safety-Protocol) | 先读后写守卫、版本检查、写入模式 |
-| [PMF 规范](PMF-Spec) | 批量编辑用的 Patchable Markdown Format |
-| [SQL 参考](SQL-Reference) | 思源 SQLite 表结构、块类型、查询示例 |
-| [KaTeX 公式规则](KaTeX-Formula-Rules) | 思源数学公式书写规范 |
-| [错误恢复](Error-Recovery) | 常见错误及解决方法 |
+| [命令参考](./docs/command-reference.md) | 所有命令的参数、默认值和示例 |
+| [数据库操作](./docs/database-operations.md) | 数据库/属性视图的专用操作指南 |
+| [写入安全协议](./SKILL.md#write-safety-protocol) | 先读后写守卫、版本检查、写入模式 |
+| [PMF 规范](./docs/pmf-spec.md) | 批量编辑用的 Patchable Markdown Format |
+| [SQL 参考](./docs/sql-reference.md) | 思源 SQLite 表结构、块类型、查询示例 |
+| [错误恢复](./docs/error-recovery.md) | 常见错误及解决方法 |
 
 ## 项目结构
 
 ```
 siyuan-notes-skill/
+├── agents/
+│   └── openai.yaml      # Claude/OpenAI skill UI 元数据
 ├── index.js           # 核心 API 和 CLI 入口
 ├── cli.js             # CLI 参数解析
 ├── format-utils.js    # 输出格式化
 ├── lib/               # 内部模块
-│   └── pmf-utils.js   # PMF 解析和补丁
+│   ├── config.js      # 环境变量与运行时配置
+│   ├── pmf-utils.js   # PMF 解析和补丁
+│   ├── query-services.js
+│   └── version-utils.js
 ├── SKILL.md           # 面向 LLM 的技能描述
 └── docs/              # 详细文档
     ├── command-reference.md

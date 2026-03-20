@@ -40,6 +40,7 @@ Thumbs.db
 *.temp
 
 # 测试文件（需要 live 思源实例）
+test/
 *-tests.js
 aepo-test-source.md
 

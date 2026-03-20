@@ -6,10 +6,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
-const { execSync } = require('child_process');
 const { createCliHandlers, printCliUsage } = require('./cli');
+const { buildRuntimeConfig, normalizeInt } = require('./lib/config');
 const { createQueryServices } = require('./lib/query-services');
+const { checkSkillVersion: checkSkillVersionImpl } = require('./lib/version-utils');
 const {
     normalizeMarkdown,
     stripKramdownIAL,
@@ -33,83 +33,29 @@ if (typeof globalThis.fetch === 'undefined') {
     throw new Error('此 skill 需要 Node.js 18+ 的内置 fetch。当前 Node 版本: ' + process.version);
 }
 
-const DEBUG_ARGV_FLAG = process.argv.includes('--debug');
-
-function isDebugModeEnabled() {
-    return process.env.DEBUG === 'true' || DEBUG_ARGV_FLAG;
-}
-
-function stripOptionalWrappingQuotes(value) {
-    const raw = String(value || '').trim();
-    if (raw.length < 2) {
-        return raw;
-    }
-    const first = raw[0];
-    const last = raw[raw.length - 1];
-    if ((first === '"' && last === '"') || (first === '\'' && last === '\'')) {
-        return raw.slice(1, -1);
-    }
-    return raw;
-}
-
-// 加载.env文件
-function loadEnvFile() {
-    try {
-        // 始终使用当前JS文件所在目录下的.env文件
-        const envPath = path.join(__dirname, '.env');
-        if (fs.existsSync(envPath)) {
-            const envContent = fs.readFileSync(envPath, 'utf8');
-            envContent.split('\n').forEach(line => {
-                const trimmedLine = line.trim();
-                if (trimmedLine && !trimmedLine.startsWith('#')) {
-                    const [key, ...valueParts] = trimmedLine.split('=');
-                    if (key && valueParts.length > 0) {
-                        const envKey = key.trim().replace(/^export\s+/, '');
-                        const value = stripOptionalWrappingQuotes(valueParts.join('=').trim());
-                        if (envKey) {
-                            // 保留外部已注入的环境变量优先级（便于测试和临时覆盖）
-                            if (!(envKey in process.env)) {
-                                process.env[envKey] = value;
-                            }
-                        }
-                    }
-                }
-            });
-            if (isDebugModeEnabled()) console.log('✅ 已加载.env配置文件:', envPath);
-        } else {
-            if (isDebugModeEnabled()) console.log('⚠️  未找到.env文件:', envPath);
-        }
-    } catch (error) {
-        if (isDebugModeEnabled()) console.log('⚠️  .env文件加载失败:', error.message);
-    }
-}
-
-// 加载环境变量 (静默模式)
-loadEnvFile();
-
-// 只在调试模式下输出配置信息
-const DEBUG_MODE = isDebugModeEnabled();
-
-/** 环境变量或默认配置 */
-const SIYUAN_HOST = process.env.SIYUAN_HOST || 'localhost';
-const SIYUAN_PORT = process.env.SIYUAN_PORT || '';
-const SIYUAN_API_TOKEN = process.env.SIYUAN_API_TOKEN || '';
-const SIYUAN_USE_HTTPS = process.env.SIYUAN_USE_HTTPS === 'true';
-const SIYUAN_BASIC_AUTH_USER = process.env.SIYUAN_BASIC_AUTH_USER || '';
-const SIYUAN_BASIC_AUTH_PASS = process.env.SIYUAN_BASIC_AUTH_PASS || '';
-const SIYUAN_ALLOW_TOKEN_IN_QUERY = process.env.SIYUAN_ALLOW_TOKEN_IN_QUERY === 'true';
-const SIYUAN_ENABLE_WRITE = process.env.SIYUAN_ENABLE_WRITE === 'true';
-const SIYUAN_REQUIRE_READ_BEFORE_WRITE = process.env.SIYUAN_REQUIRE_READ_BEFORE_WRITE !== 'false';
-const SIYUAN_READ_GUARD_TTL_SECONDS = normalizeInt(process.env.SIYUAN_READ_GUARD_TTL_SECONDS, 3600, 30, 604800);
-const SIYUAN_READ_GUARD_WRITE_GRACE_MS = normalizeInt(process.env.SIYUAN_READ_GUARD_WRITE_GRACE_MS, 8000, 1000, 60000);
-const SIYUAN_LIST_DOCUMENTS_LIMIT = normalizeInt(process.env.SIYUAN_LIST_DOCUMENTS_LIMIT, 200, 1, 2000);
-const SIYUAN_BLOCK_ROOT_CACHE_MAX = normalizeInt(process.env.SIYUAN_BLOCK_ROOT_CACHE_MAX, 5000, 100, 50000);
-const READ_GUARD_CACHE_FILE = path.join(__dirname, '.siyuan-read-guard-cache.json');
-const OPEN_DOC_CHAR_LIMIT = normalizeInt(process.env.SIYUAN_OPEN_DOC_CHAR_LIMIT, 15000, 1000, 1000000);
-const OPEN_DOC_BLOCK_PAGE_SIZE = normalizeInt(process.env.SIYUAN_OPEN_DOC_BLOCK_PAGE_SIZE, 50, 5, 10000);
+const {
+    DEBUG_MODE,
+    SIYUAN_HOST,
+    SIYUAN_PORT,
+    SIYUAN_USE_HTTPS,
+    SIYUAN_BASE_PATH,
+    SIYUAN_API_TOKEN,
+    SIYUAN_BASIC_AUTH_USER,
+    SIYUAN_BASIC_AUTH_PASS,
+    SIYUAN_ALLOW_TOKEN_IN_QUERY,
+    SIYUAN_ENABLE_WRITE,
+    SIYUAN_REQUIRE_READ_BEFORE_WRITE,
+    SIYUAN_READ_GUARD_TTL_SECONDS,
+    SIYUAN_READ_GUARD_WRITE_GRACE_MS,
+    SIYUAN_LIST_DOCUMENTS_LIMIT,
+    SIYUAN_BLOCK_ROOT_CACHE_MAX,
+    READ_GUARD_CACHE_FILE,
+    OPEN_DOC_CHAR_LIMIT,
+    OPEN_DOC_BLOCK_PAGE_SIZE,
+    API_BASE_URL
+} = buildRuntimeConfig(__dirname, process.env, process.argv);
 
 /** API端点配置 */
-const API_BASE_URL = `${SIYUAN_USE_HTTPS ? 'https' : 'http'}://${SIYUAN_HOST}${SIYUAN_PORT ? ':' + SIYUAN_PORT : ''}`;
 const API_ENDPOINTS = {
     SQL_QUERY: '/api/query/sql',
     SYSTEM_VERSION: '/api/system/version',
@@ -129,11 +75,46 @@ const API_ENDPOINTS = {
     GET_PATH_BY_ID: '/api/filetree/getPathByID',
     GET_IDS_BY_HPATH: '/api/filetree/getIDsByHPath',
     MOVE_DOCS_BY_ID: '/api/filetree/moveDocsByID',
-    RENAME_DOC: '/api/filetree/renameDoc'
+    RENAME_DOC: '/api/filetree/renameDoc',
+    ASSET_UPLOAD: '/api/asset/upload',
+    AV_RENDER: '/api/av/renderAttributeView',
+    AV_GET: '/api/av/getAttributeView',
+    AV_KEYS: '/api/av/getAttributeViewKeys',
+    AV_KEYS_BY_AV_ID: '/api/av/getAttributeViewKeysByAvID',
+    AV_KEYS_BY_ID: '/api/av/getAttributeViewKeysByID',
+    AV_PRIMARY_KEYS: '/api/av/getAttributeViewPrimaryKeyValues',
+    AV_SET_CELL: '/api/av/setAttributeViewBlockAttr',
+    AV_BATCH_SET_CELLS: '/api/av/batchSetAttributeViewBlockAttrs',
+    AV_ADD_KEY: '/api/av/addAttributeViewKey',
+    AV_REMOVE_KEY: '/api/av/removeAttributeViewKey',
+    AV_SORT_KEY: '/api/av/sortAttributeViewKey',
+    AV_SORT_VIEW_KEY: '/api/av/sortAttributeViewViewKey',
+    AV_ADD_ROWS: '/api/av/addAttributeViewBlocks',
+    AV_REMOVE_ROWS: '/api/av/removeAttributeViewBlocks',
+    AV_CHANGE_LAYOUT: '/api/av/changeAttrViewLayout',
+    AV_SET_VIEW: '/api/av/setDatabaseBlockView',
+    AV_DUPLICATE: '/api/av/duplicateAttributeViewBlock',
+    AV_APPEND_DETACHED_ROWS: '/api/av/appendAttributeViewDetachedBlocksWithValues',
+    AV_GET_DEFAULT_VALUES: '/api/av/getAttributeViewAddingBlockDefaultValues',
+    AV_FILTER_SORT: '/api/av/getAttributeViewFilterSort',
+    AV_SEARCH: '/api/av/searchAttributeView',
+    AV_SEARCH_RELATION_KEY: '/api/av/searchAttributeViewRelationKey',
+    AV_SEARCH_ROLLUP_DEST_KEYS: '/api/av/searchAttributeViewRollupDestKeys',
+    AV_ITEM_IDS_BY_BOUND_IDS: '/api/av/getAttributeViewItemIDsByBoundIDs',
+    AV_BOUND_BLOCK_IDS_BY_ITEM_IDS: '/api/av/getAttributeViewBoundBlockIDsByItemIDs',
+    AV_MIRROR_BLOCKS: '/api/av/getMirrorDatabaseBlocks',
+    AV_RENDER_IMAGES: '/api/av/getCurrentAttrViewImages',
+    AV_SET_GROUP: '/api/av/setAttrViewGroup',
+    AV_BATCH_REPLACE_BLOCKS: '/api/av/batchReplaceAttributeViewBlocks'
+    ,
+    TRANSACTIONS: '/api/transactions'
 };
 
 if (DEBUG_MODE) {
     console.log(`📡 服务器地址: ${API_BASE_URL}`);
+    if (SIYUAN_BASE_PATH) {
+        console.log(`🛣️  API Base Path: ${SIYUAN_BASE_PATH}`);
+    }
     console.log(`🔑 API Token: ${SIYUAN_API_TOKEN ? '已配置' : '未配置'}`);
     console.log(`🔐 Basic Auth: ${SIYUAN_BASIC_AUTH_USER ? `用户: ${SIYUAN_BASIC_AUTH_USER}` : '未配置'}`);
     console.log(`🔐 Token查询串: ${SIYUAN_ALLOW_TOKEN_IN_QUERY ? '已启用(不推荐)' : '已禁用(默认)'}`);
@@ -159,23 +140,6 @@ function getBasicAuthHeader() {
  */
 function escapeSqlValue(value) {
     return String(value).replace(/'/g, "''");
-}
-
-/**
- * 限制整数参数范围
- * @param {number|string} value - 输入值
- * @param {number} fallback - 默认值
- * @param {number} min - 最小值
- * @param {number} max - 最大值
- * @returns {number} 规范化后的值
- */
-function normalizeInt(value, fallback, min, max) {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isNaN(parsed)) {
-        return fallback;
-    }
-
-    return Math.max(min, Math.min(max, parsed));
 }
 
 /**
@@ -601,6 +565,7 @@ cp .env.example .env
 SIYUAN_HOST=你的服务器地址
 SIYUAN_PORT=端口号 (HTTPS且无特殊端口可留空)
 SIYUAN_USE_HTTPS=true (如果使用HTTPS)
+SIYUAN_BASE_PATH=/可选子路径
 SIYUAN_API_TOKEN=你的实际API_TOKEN
 
 # 可选：HTTP Basic Auth (如果启用了Basic Auth)
@@ -631,142 +596,8 @@ SIYUAN_BASIC_AUTH_PASS=password
     return true;
 }
 
-function safeExec(command) {
-    try {
-        return String(execSync(command, { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] })).trim();
-    } catch (error) {
-        return '';
-    }
-}
-
-function readLocalSkillVersion() {
-    try {
-        const pkgPath = path.join(__dirname, 'package.json');
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-        return String(pkg.version || '').trim();
-    } catch (error) {
-        return '';
-    }
-}
-
-function parseSemver(value) {
-    const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(value || '').trim());
-    if (!match) {
-        return null;
-    }
-    return {
-        major: Number(match[1]),
-        minor: Number(match[2]),
-        patch: Number(match[3])
-    };
-}
-
-function compareSemver(a, b) {
-    if (a.major !== b.major) return a.major - b.major;
-    if (a.minor !== b.minor) return a.minor - b.minor;
-    return a.patch - b.patch;
-}
-
-function fetchJson(url) {
-    return new Promise((resolve, reject) => {
-        const req = https.get(url, {
-            headers: {
-                'User-Agent': 'siyuan-notes-skill',
-                Accept: 'application/vnd.github+json'
-            }
-        }, (res) => {
-            let raw = '';
-            res.on('data', chunk => {
-                raw += chunk;
-            });
-            res.on('end', () => {
-                if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
-                    reject(new Error(`HTTP ${res.statusCode || 'unknown'}`));
-                    return;
-                }
-                try {
-                    resolve(JSON.parse(raw));
-                } catch (error) {
-                    reject(error);
-                }
-            });
-        });
-
-        req.on('error', reject);
-    });
-}
-
-async function getLatestTagFromGithub(repo) {
-    const releaseUrl = `https://api.github.com/repos/${repo}/releases/latest`;
-    try {
-        const release = await fetchJson(releaseUrl);
-        if (release && release.tag_name) {
-            return String(release.tag_name).trim();
-        }
-    } catch (error) {
-        // ignore and fallback to tags
-    }
-
-    const tagsUrl = `https://api.github.com/repos/${repo}/tags?per_page=100`;
-    const tags = await fetchJson(tagsUrl);
-    if (!Array.isArray(tags) || tags.length === 0) {
-        return '';
-    }
-
-    let best = null;
-    for (const tag of tags) {
-        const name = tag && tag.name ? String(tag.name).trim() : '';
-        const semver = parseSemver(name);
-        if (!semver) continue;
-        if (!best || compareSemver(semver, best.semver) > 0) {
-            best = { name, semver };
-        }
-    }
-
-    return best ? best.name : '';
-}
-
 async function checkSkillVersion() {
-    const localVersion = readLocalSkillVersion() || 'unknown';
-    const localSha = safeExec('git rev-parse --short HEAD') || 'unknown';
-    const localTag = safeExec('git describe --tags --exact-match') || 'no-tag';
-    const repo = 'fanxing-6/siyuan-notes-skill';
-
-    let latestTag = '';
-    let latestVersion = '';
-    let status = 'unknown';
-    let errorMessage = '';
-
-    try {
-        latestTag = await getLatestTagFromGithub(repo);
-        latestVersion = latestTag.replace(/^v/, '');
-        if (!latestTag) {
-            status = 'unknown';
-        } else {
-            const localSemver = parseSemver(localVersion);
-            const latestSemver = parseSemver(latestVersion);
-            if (localSemver && latestSemver) {
-                status = compareSemver(localSemver, latestSemver) >= 0 ? 'latest' : 'outdated';
-            } else if (localVersion && latestVersion) {
-                status = localVersion === latestVersion ? 'latest' : 'outdated';
-            } else {
-                status = 'unknown';
-            }
-        }
-    } catch (error) {
-        status = 'unknown';
-        errorMessage = error.message || String(error);
-    }
-
-    return {
-        localVersion,
-        localSha,
-        localTag,
-        latestTag,
-        latestVersion,
-        status,
-        error: errorMessage
-    };
+    return await checkSkillVersionImpl(__dirname);
 }
 
 /**
@@ -867,6 +698,71 @@ async function requestSiyuanApi(apiPath, requestBody = {}, options = {}) {
         }
 
         if (error.message.includes('思源API错误') || error.message.includes('HTTP') || error.message.includes('API端点未找到')) {
+            throw error;
+        }
+
+        throw new Error(`API请求失败(${apiPath}): ${error.message}`);
+    }
+}
+
+async function requestSiyuanMultipartApi(apiPath, formData, options = {}) {
+    const {
+        requireAuth = true
+    } = options;
+
+    if (requireAuth && !checkEnvironmentConfig()) {
+        throw new Error('环境配置不完整');
+    }
+
+    const headers = {};
+    let requestUrl = `${API_BASE_URL}${apiPath}`;
+    const basicAuthHeader = getBasicAuthHeader();
+    const hasBasicAuth = Object.keys(basicAuthHeader).length > 0;
+    let authMode = requireAuth ? 'Token(header)' : 'No Auth';
+
+    if (hasBasicAuth) {
+        headers.Authorization = basicAuthHeader.Authorization;
+        authMode = 'Basic Auth';
+        if (requireAuth) {
+            if (SIYUAN_ALLOW_TOKEN_IN_QUERY) {
+                requestUrl += `${requestUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(SIYUAN_API_TOKEN)}`;
+                authMode = 'Basic Auth + Token(query)';
+            } else {
+                headers['X-SiYuan-Token'] = SIYUAN_API_TOKEN;
+                authMode = 'Basic Auth + Token(header:x-siyuan-token)';
+            }
+        }
+    } else if (requireAuth) {
+        headers.Authorization = `Token ${SIYUAN_API_TOKEN}`;
+    }
+
+    if (DEBUG_MODE) {
+        console.log(`📨 请求: ${apiPath} (${authMode}, multipart)`);
+    }
+
+    try {
+        const response = await fetch(requestUrl, {
+            method: 'POST',
+            headers,
+            body: formData
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        if (result.code !== 0) {
+            throw new Error(`思源API错误: ${result.msg || '未知错误'}`);
+        }
+
+        return result.data;
+    } catch (error) {
+        if (error.name === 'FetchError' || error.code === 'ECONNREFUSED' || String(error.message).includes('fetch failed')) {
+            throw new Error(`无法连接到思源笔记: ${error.message}. 请确认思源笔记正在运行且地址端口可达`);
+        }
+
+        if (error.message.includes('思源API错误') || error.message.includes('HTTP')) {
             throw error;
         }
 
@@ -978,7 +874,8 @@ async function listDocsByPath(notebook, pathValue = '/') {
 
     const data = await requestSiyuanApi(API_ENDPOINTS.LIST_DOCS_BY_PATH, {
         notebook,
-        path: normalizedPath
+        path: normalizedPath,
+        maxListCount: 0
     }, { requireAuth: true });
 
     return {
@@ -1293,10 +1190,16 @@ async function moveDocsByID(fromIDs, toID) {
         throw new Error('fromIDs 不能为空');
     }
 
-    return await requestSiyuanApi(API_ENDPOINTS.MOVE_DOCS_BY_ID, {
+    const rawData = await requestSiyuanApi(API_ENDPOINTS.MOVE_DOCS_BY_ID, {
         fromIDs,
         toID
     }, { requireAuth: true });
+    return normalizeGeneralWriteResult('moveDocsByID', {
+        fromIDs,
+        toID
+    }, rawData, {
+        movedDocIds: [...fromIDs]
+    });
 }
 
 /**
@@ -1445,6 +1348,9 @@ async function reorganizeSubdocsByID(toID, fromIDs) {
     }
 
     return {
+        success: true,
+        state: 'applied',
+        operation: 'moveDocsByID',
         plan,
         execution: {
             result: apiResult,
@@ -1536,11 +1442,19 @@ async function createDocWithMd(notebook, pathValue, markdown = '') {
     assertNonEmptyString(notebook, 'notebook');
     assertNonEmptyString(pathValue, 'path');
 
-    return await requestSiyuanApi(API_ENDPOINTS.CREATE_DOC_WITH_MD, {
+    const rawData = await requestSiyuanApi(API_ENDPOINTS.CREATE_DOC_WITH_MD, {
         notebook,
         path: pathValue,
         markdown
     }, { requireAuth: true });
+    return normalizeGeneralWriteResult('createDocWithMd', {
+        notebook,
+        path: pathValue,
+        markdownLength: String(markdown || '').length
+    }, rawData, {
+        docId: typeof rawData === 'string' ? rawData : '',
+        created: true
+    });
 }
 
 /**
@@ -1556,11 +1470,18 @@ async function renameDoc(notebook, docPath, title) {
     assertNonEmptyString(docPath, 'path');
     assertNonEmptyString(title, 'title');
 
-    return await requestSiyuanApi(API_ENDPOINTS.RENAME_DOC, {
+    const rawData = await requestSiyuanApi(API_ENDPOINTS.RENAME_DOC, {
         notebook,
         path: docPath,
         title
     }, { requireAuth: true });
+    return normalizeGeneralWriteResult('renameDoc', {
+        notebook,
+        path: docPath,
+        title
+    }, rawData, {
+        renamed: true
+    });
 }
 
 /**
@@ -1626,11 +1547,20 @@ async function appendBlock(parentID, markdown) {
     assertNonEmptyString(parentID, 'parentID');
     assertNonEmptyString(markdown, 'markdown');
     await ensureBlockReadBeforeWrite(parentID, 'appendBlock');
-    return await requestSiyuanApi(API_ENDPOINTS.APPEND_BLOCK, {
+    const rawData = await requestSiyuanApi(API_ENDPOINTS.APPEND_BLOCK, {
         parentID,
         dataType: 'markdown',
         data: markdown
     }, { requireAuth: true });
+    const insertedBlockId = extractInsertedBlockId(rawData);
+    return normalizeGeneralWriteResult('appendBlock', {
+        parentID,
+        dataType: 'markdown',
+        markdownLength: markdown.length
+    }, rawData, {
+        insertedBlockId,
+        insertedBlockIds: insertedBlockId ? [insertedBlockId] : []
+    });
 }
 
 /**
@@ -1659,13 +1589,24 @@ async function insertBlock(markdown, anchors = {}) {
         await ensureBlockReadBeforeWrite(anchorId, 'insertBlock');
     }
 
-    return await requestSiyuanApi(API_ENDPOINTS.INSERT_BLOCK, {
+    const rawData = await requestSiyuanApi(API_ENDPOINTS.INSERT_BLOCK, {
         dataType: 'markdown',
         data: markdown,
         parentID,
         previousID,
         nextID
     }, { requireAuth: true });
+    const insertedBlockId = extractInsertedBlockId(rawData);
+    return normalizeGeneralWriteResult('insertBlock', {
+        dataType: 'markdown',
+        markdownLength: markdown.length,
+        parentID,
+        previousID,
+        nextID
+    }, rawData, {
+        insertedBlockId,
+        insertedBlockIds: insertedBlockId ? [insertedBlockId] : []
+    });
 }
 
 /**
@@ -1688,11 +1629,18 @@ async function moveBlock(id, anchors = {}) {
         throw new Error('moveBlock 需要 parentID 或 previousID 作为锚点');
     }
 
-    return await requestSiyuanApi(API_ENDPOINTS.MOVE_BLOCK, {
+    const rawData = await requestSiyuanApi(API_ENDPOINTS.MOVE_BLOCK, {
         id,
         parentID,
         previousID
     }, { requireAuth: true });
+    return normalizeGeneralWriteResult('moveBlock', {
+        id,
+        parentID,
+        previousID
+    }, rawData, {
+        movedBlockId: id
+    });
 }
 
 function normalizeMarkdownLineEndings(markdown) {
@@ -1931,42 +1879,90 @@ function splitMarkdownIntoWritableBlocks(markdown) {
 }
 
 function inferWritableBlockType(markdown) {
+    const htmlDerived = (() => {
+        const firstLine = String(markdown || '').trim();
+        if (!firstLine) {
+            return null;
+        }
+
+        if (/^\{\{[\s\S]+\}\}$/.test(firstLine)) {
+            return { type: 'query_embed', subType: '' };
+        }
+        if (/^<div\b[^>]*\bdata-type=["']NodeAttributeView["'][^>]*>/i.test(firstLine) || /^<div\b[^>]*\bdata-av-type=["'][^"']+["'][^>]*>/i.test(firstLine)) {
+            return { type: 'av', subType: '' };
+        }
+        if (/^<iframe\b[^>]*\bdata-subtype=["']widget["'][^>]*>/i.test(firstLine) || /^<iframe\b[^>]*\bsrc=["']\/widgets\//i.test(firstLine)) {
+            return { type: 'widget', subType: '' };
+        }
+        if (/^<iframe\b/i.test(firstLine)) {
+            return { type: 'iframe', subType: '' };
+        }
+        if (/^<video\b/i.test(firstLine)) {
+            return { type: 'video', subType: '' };
+        }
+        if (/^<audio\b/i.test(firstLine)) {
+            return { type: 'audio', subType: '' };
+        }
+        if (/^<[a-z][\w:-]*\b/i.test(firstLine)) {
+            return { type: 'html', subType: '' };
+        }
+        return null;
+    })();
+    if (htmlDerived) {
+        return htmlDerived;
+    }
+
+    const match = String(markdown || '').trim().match(/^>\s*\[!([A-Z][A-Z0-9_-]*)\](?:\s+.*)?$/im);
+    if (match) {
+        return {
+            type: 'callout',
+            subType: String(match[1] || '').toUpperCase()
+        };
+    }
+
     const text = normalizeMarkdownLineEndings(markdown).trim();
     if (!text) {
-        return '';
+        return { type: '', subType: '' };
     }
     const lines = text.split('\n');
     const firstLine = String(lines[0] || '').trim();
     const secondLine = String(lines[1] || '').trim();
 
     if (getFenceMarker(firstLine)) {
-        return 'c';
+        return { type: 'c', subType: '' };
     }
     if (isDisplayMathFenceLine(firstLine)) {
-        return 'm';
+        return { type: 'm', subType: '' };
     }
     if (isHeadingLine(firstLine)) {
-        return 'h';
+        const level = firstLine.match(/^(#{1,6})\s+/)?.[1]?.length || 1;
+        return { type: 'h', subType: `h${level}` };
     }
     if (isListStartLine(lines[0] || '')) {
-        return 'l';
+        if (/^\s*[-*+]\s+\[[ xX-]\]\s+/.test(String(lines[0] || ''))) {
+            return { type: 'l', subType: 't' };
+        }
+        if (/^\s*[-*+]\s+/.test(String(lines[0] || ''))) {
+            return { type: 'l', subType: 'u' };
+        }
+        return { type: 'l', subType: 'o' };
     }
     if (isBlockquoteLine(firstLine)) {
-        return 'b';
+        return { type: 'b', subType: '' };
     }
     if (isTableRowLine(firstLine) && isTableDividerLine(secondLine)) {
-        return 't';
+        return { type: 't', subType: '' };
     }
     if (/^[-*_]{3,}\s*$/.test(firstLine) && lines.length === 1) {
-        return 'tb';
+        return { type: 'tb', subType: '' };
     }
-    return 'p';
+    return { type: 'p', subType: '' };
 }
 
 async function getBlockSnapshotById(id) {
     const safeId = escapeSqlValue(id);
     const rows = await executeSiyuanQuery(`
-        SELECT id, type, root_id, parent_id, markdown
+        SELECT id, type, subtype, root_id, parent_id, markdown
         FROM blocks
         WHERE id = '${safeId}'
         LIMIT 1
@@ -1977,7 +1973,7 @@ async function getBlockSnapshotById(id) {
     return rows[0];
 }
 
-async function verifyPersistedBlock({ blockId, rootDocId, expectedType, context }) {
+async function verifyPersistedBlock({ blockId, rootDocId, expectedType, expectedSubType, context }) {
     let lastError = '';
     for (let attempt = 0; attempt < 30; attempt += 1) {
         const snapshot = await getBlockSnapshotById(blockId);
@@ -1987,6 +1983,8 @@ async function verifyPersistedBlock({ blockId, rootDocId, expectedType, context 
             lastError = `[${context}] 写后校验失败: 块 ${blockId} root_id=${snapshot.root_id}，预期=${rootDocId}`;
         } else if (expectedType && snapshot.type !== expectedType) {
             lastError = `[${context}] 写后校验失败: 块 ${blockId} 类型=${snapshot.type}，预期=${expectedType}`;
+        } else if (expectedSubType && snapshot.subtype !== expectedSubType) {
+            lastError = `[${context}] 写后校验失败: 块 ${blockId} subtype=${snapshot.subtype || ''}，预期=${expectedSubType}`;
         } else {
             return;
         }
@@ -2017,9 +2015,42 @@ async function updateBlock(id, markdown) {
     }
 
     const rootDocId = await ensureBlockReadBeforeWrite(id, 'updateBlock');
+    const targetType = await getBlockTypeById(id);
+
+    if (targetType === 'd') {
+        const rawData = await requestSiyuanApi(API_ENDPOINTS.UPDATE_BLOCK, {
+            id,
+            dataType: 'markdown',
+            data: normalizedMarkdown
+        }, { requireAuth: true });
+        await refreshDocumentVersion(rootDocId);
+        return {
+            success: true,
+            state: 'applied',
+            operation: 'updateBlock',
+            mode: 'document-root-update',
+            request: {
+                id,
+                dataType: 'markdown',
+                markdownLength: normalizedMarkdown.length
+            },
+            touchedDocIds: [rootDocId],
+            message: '目标为文档根块，已交由思源内核一次性重建文档内容',
+            rawData,
+            rawResultType: Array.isArray(rawData) ? 'transaction_array' : (rawData === null ? 'empty' : typeof rawData),
+            result: normalizeGeneralWriteResult('updateBlock', {
+                id,
+                dataType: 'markdown',
+                markdownLength: normalizedMarkdown.length
+            }, rawData, {
+                updatedBlockId: id
+            })
+        };
+    }
 
     if (writableBlocks.length === 1) {
-        const result = await requestSiyuanApi(API_ENDPOINTS.UPDATE_BLOCK, {
+        const expectedBlockInfo = inferWritableBlockType(writableBlocks[0]);
+        const rawData = await requestSiyuanApi(API_ENDPOINTS.UPDATE_BLOCK, {
             id,
             dataType: 'markdown',
             data: writableBlocks[0]
@@ -2028,15 +2059,27 @@ async function updateBlock(id, markdown) {
         await verifyPersistedBlock({
             blockId: id,
             rootDocId,
-            expectedType: inferWritableBlockType(writableBlocks[0]),
+            expectedType: expectedBlockInfo.type,
+            expectedSubType: expectedBlockInfo.subType,
             context: 'updateBlock-single'
         });
-        return result;
+        return normalizeGeneralWriteResult('updateBlock', {
+            id,
+            dataType: 'markdown',
+            markdownLength: writableBlocks[0].length
+        }, rawData, {
+            mode: 'single-block-update',
+            updatedBlockId: id,
+            touchedDocIds: [rootDocId],
+            expectedType: expectedBlockInfo.type,
+            expectedSubType: expectedBlockInfo.subType
+        });
     }
 
     // 多块内容不直接走单块 update，改为“更新首块 + 顺序插入剩余块”
     const firstBlock = writableBlocks[0];
-    const updateResult = await requestSiyuanApi(API_ENDPOINTS.UPDATE_BLOCK, {
+    const firstBlockInfo = inferWritableBlockType(firstBlock);
+    const updateRawData = await requestSiyuanApi(API_ENDPOINTS.UPDATE_BLOCK, {
         id,
         dataType: 'markdown',
         data: firstBlock
@@ -2045,7 +2088,8 @@ async function updateBlock(id, markdown) {
     await verifyPersistedBlock({
         blockId: id,
         rootDocId,
-        expectedType: inferWritableBlockType(firstBlock),
+        expectedType: firstBlockInfo.type,
+        expectedSubType: firstBlockInfo.subType,
         context: 'updateBlock-structured-first'
     });
 
@@ -2053,6 +2097,7 @@ async function updateBlock(id, markdown) {
     const inserted = [];
     for (let index = 1; index < writableBlocks.length; index += 1) {
         const blockMarkdown = writableBlocks[index];
+        const blockInfo = inferWritableBlockType(blockMarkdown);
         const insertResult = await insertBlock(blockMarkdown, { previousID: anchorId });
         const insertedId = extractInsertedBlockId(insertResult);
         if (!insertedId) {
@@ -2063,13 +2108,15 @@ async function updateBlock(id, markdown) {
         await verifyPersistedBlock({
             blockId: insertedId,
             rootDocId,
-            expectedType: inferWritableBlockType(blockMarkdown),
+            expectedType: blockInfo.type,
+            expectedSubType: blockInfo.subType,
             context: `updateBlock-structured-insert-${index + 1}`
         });
 
         inserted.push({
             id: insertedId,
-            expectedType: inferWritableBlockType(blockMarkdown),
+            expectedType: blockInfo.type,
+            expectedSubType: blockInfo.subType,
             result: insertResult
         });
         anchorId = insertedId;
@@ -2078,6 +2125,15 @@ async function updateBlock(id, markdown) {
     return {
         mode: 'structured-update',
         message: '检测到多块 Markdown，已自动切换为安全拆块写入（首块 update + 后续 insert）',
+        success: true,
+        state: 'applied',
+        operation: 'updateBlock',
+        request: {
+            id,
+            dataType: 'markdown',
+            markdownLength: normalizedMarkdown.length
+        },
+        touchedDocIds: [rootDocId],
         summary: {
             inputBlockCount: writableBlocks.length,
             updatedId: id,
@@ -2085,7 +2141,15 @@ async function updateBlock(id, markdown) {
         },
         updated: {
             id,
-            result: updateResult
+            result: normalizeGeneralWriteResult('updateBlock', {
+                id,
+                dataType: 'markdown',
+                markdownLength: firstBlock.length
+            }, updateRawData, {
+                updatedBlockId: id,
+                expectedType: firstBlockInfo.type,
+                expectedSubType: firstBlockInfo.subType
+            })
         },
         inserted
     };
@@ -2100,9 +2164,14 @@ async function deleteBlock(id) {
     ensureWriteEnabled();
     assertNonEmptyString(id, 'id');
     const rootDocId = await ensureBlockReadBeforeWrite(id, 'deleteBlock');
-    const result = await requestSiyuanApi(API_ENDPOINTS.DELETE_BLOCK, { id }, { requireAuth: true });
+    const rawData = await requestSiyuanApi(API_ENDPOINTS.DELETE_BLOCK, { id }, { requireAuth: true });
     await refreshDocumentVersion(rootDocId);
-    return result;
+    return normalizeGeneralWriteResult('deleteBlock', {
+        id
+    }, rawData, {
+        deletedBlockId: id,
+        touchedDocIds: [rootDocId]
+    });
 }
 
 /**
@@ -2126,7 +2195,7 @@ function normalizeWritableMarkdown(markdown) {
 /**
  * 读取标题块的章节子块 ID 列表（只读 helper，不涉及写入逻辑）
  * @param {string} headingBlockId - 标题块ID
- * @returns {Promise<{headingBlockId: string, rootDocId: string, headingSubtype: string, childBlockIds: string[]}>}
+ * @returns {Promise<{headingBlockId: string, rootDocId: string, headingSubtype: string, childBlocks: Array, childBlockIds: string[]}>}
  */
 async function getSectionChildBlockIds(headingBlockId) {
     assertNonEmptyString(headingBlockId, 'headingBlockId');
@@ -2150,9 +2219,22 @@ async function getSectionChildBlockIds(headingBlockId) {
     const headingSubtype = rows?.[0]?.subtype || '';
 
     const childBlocks = await getChildBlocks(headingBlockId);
-    const childBlockIds = childBlocks.map((item) => item?.id).filter(Boolean);
+    const normalizedChildBlocks = childBlocks
+        .map((item) => ({
+            id: item?.id || '',
+            type: item?.type || '',
+            subType: item?.subType || ''
+        }))
+        .filter((item) => item.id);
+    const childBlockIds = normalizedChildBlocks.map((item) => item.id);
 
-    return { headingBlockId, rootDocId, headingSubtype, childBlockIds };
+    return {
+        headingBlockId,
+        rootDocId,
+        headingSubtype,
+        childBlocks: normalizedChildBlocks,
+        childBlockIds
+    };
 }
 
 /**
@@ -2204,10 +2286,21 @@ async function openSection(headingBlockId, view = 'readable') {
         // 限流并发获取所有子块的 kramdown，避免大章节瞬时打满请求
         const allIds = [section.headingBlockId, ...section.childBlockIds];
         const kramdownResults = await mapWithConcurrency(allIds, 8, (id) => getBlockKramdown(id));
-        const headingParsed = parseBlocksFromKramdown(kramdownResults[0], {});
+        const headingParsed = parseBlocksFromKramdown(kramdownResults[0], {}, {
+            [section.headingBlockId]: {
+                type: 'h',
+                subType: section.headingSubtype
+            }
+        });
         const blocks = [];
         for (let i = 1; i < kramdownResults.length; i++) {
-            blocks.push(...parseBlocksFromKramdown(kramdownResults[i], {}));
+            const child = section.childBlocks[i - 1];
+            blocks.push(...parseBlocksFromKramdown(kramdownResults[i], {}, child ? {
+                [child.id]: {
+                    type: child.type,
+                    subType: child.subType
+                }
+            } : {}));
         }
 
         const meta = await getDocumentMeta(section.rootDocId);
@@ -2341,6 +2434,9 @@ async function replaceSection(headingBlockId, markdown) {
     await refreshDocumentVersion(rootDocId);
 
     return {
+        success: true,
+        state: 'applied',
+        operation: 'replaceSection',
         plan,
         execution: {
             deletedCount: deleted.length,
@@ -2375,9 +2471,13 @@ async function appendMarkdownToBlock(parentBlockId, markdown) {
     const rootDocId = await getRootDocIdByBlockId(parentBlockId);
     await refreshDocumentVersion(rootDocId);
     return {
+        success: true,
+        state: 'applied',
+        operation: 'appendMarkdownToBlock',
         action: 'append_block',
         parentBlockId,
         parentType,
+        touchedDocIds: [rootDocId],
         execution: {
             appended: true,
             result
@@ -2389,8 +2489,6 @@ const {
     searchNotes,
     searchInDocument,
     listDocuments,
-    getDocumentHeadings,
-    getDocumentBlocks,
     searchByTag,
     getBacklinks,
     searchTasks,
@@ -2408,6 +2506,2157 @@ const {
     strftime,
     listDocumentsLimit: SIYUAN_LIST_DOCUMENTS_LIMIT
 });
+
+async function queryDocumentBlockRows(rootId) {
+    assertNonEmptyString(rootId, 'rootId');
+    const safeRootId = escapeSqlValue(rootId);
+    return await executeSiyuanQuery(`
+        SELECT id, content, markdown, type, subtype, created, updated, parent_id, ial
+        FROM blocks
+        WHERE root_id = '${safeRootId}'
+    `);
+}
+
+async function getDocumentBlocksInTreeOrder(rootId) {
+    assertNonEmptyString(rootId, 'rootId');
+    const [kramdown, rows] = await Promise.all([
+        getBlockKramdown(rootId),
+        queryDocumentBlockRows(rootId)
+    ]);
+
+    const rowMap = new Map();
+    const parentIdMap = {};
+    const blockMetaMap = {};
+
+    for (const row of rows) {
+        if (!row || !row.id) {
+            continue;
+        }
+
+        rowMap.set(row.id, row);
+        parentIdMap[row.id] = row.parent_id || '';
+        blockMetaMap[row.id] = {
+            type: row.type || '',
+            subType: row.subtype || '',
+            parentId: row.parent_id || ''
+        };
+    }
+
+    const orderedBlocks = parseBlocksFromKramdown(kramdown, parentIdMap, blockMetaMap);
+    return orderedBlocks
+        .filter((block) => rowMap.has(block.id))
+        .map((block) => {
+            const row = rowMap.get(block.id) || {};
+            return {
+                id: block.id,
+                content: row.content || '',
+                markdown: block.markdown,
+                type: block.type || row.type || '',
+                subType: block.subType || row.subtype || '',
+                subtype: block.subType || row.subtype || '',
+                created: row.created || '',
+                updated: row.updated || '',
+                parentId: block.parentId || row.parent_id || '',
+                parent_id: block.parentId || row.parent_id || '',
+                ial: row.ial || '',
+                root_id: rootId
+            };
+        });
+}
+
+async function getDocumentHeadings(rootId, headingType = null) {
+    const blocks = await getDocumentBlocksInTreeOrder(rootId);
+    return blocks.filter((block) => {
+        if (block.type !== 'h') {
+            return false;
+        }
+        if (headingType && block.subtype !== headingType) {
+            return false;
+        }
+        return true;
+    });
+}
+
+async function getDocumentBlocks(rootId, blockType = null) {
+    const blocks = await getDocumentBlocksInTreeOrder(rootId);
+    if (!blockType) {
+        return blocks;
+    }
+
+    return blocks.filter((block) => block.type === blockType);
+}
+
+const ATTRIBUTE_VIEW_API_SPECS = {
+    renderAttributeView: { path: API_ENDPOINTS.AV_RENDER, write: false },
+    getAttributeView: { path: API_ENDPOINTS.AV_GET, write: false },
+    getAttributeViewKeys: { path: API_ENDPOINTS.AV_KEYS, write: false },
+    getAttributeViewKeysByAvID: { path: API_ENDPOINTS.AV_KEYS_BY_AV_ID, write: false },
+    getAttributeViewKeysByID: { path: API_ENDPOINTS.AV_KEYS_BY_ID, write: false },
+    getAttributeViewPrimaryKeyValues: { path: API_ENDPOINTS.AV_PRIMARY_KEYS, write: false },
+    getAttributeViewAddingBlockDefaultValues: { path: API_ENDPOINTS.AV_GET_DEFAULT_VALUES, write: false },
+    getAttributeViewFilterSort: { path: API_ENDPOINTS.AV_FILTER_SORT, write: false },
+    searchAttributeView: { path: API_ENDPOINTS.AV_SEARCH, write: false },
+    searchAttributeViewRelationKey: { path: API_ENDPOINTS.AV_SEARCH_RELATION_KEY, write: false },
+    searchAttributeViewRollupDestKeys: { path: API_ENDPOINTS.AV_SEARCH_ROLLUP_DEST_KEYS, write: false },
+    getAttributeViewItemIDsByBoundIDs: { path: API_ENDPOINTS.AV_ITEM_IDS_BY_BOUND_IDS, write: false },
+    getAttributeViewBoundBlockIDsByItemIDs: { path: API_ENDPOINTS.AV_BOUND_BLOCK_IDS_BY_ITEM_IDS, write: false },
+    getMirrorDatabaseBlocks: { path: API_ENDPOINTS.AV_MIRROR_BLOCKS, write: false },
+    getCurrentAttrViewImages: { path: API_ENDPOINTS.AV_RENDER_IMAGES, write: false },
+    setAttributeViewBlockAttr: { path: API_ENDPOINTS.AV_SET_CELL, write: true },
+    batchSetAttributeViewBlockAttrs: { path: API_ENDPOINTS.AV_BATCH_SET_CELLS, write: true },
+    addAttributeViewKey: { path: API_ENDPOINTS.AV_ADD_KEY, write: true },
+    removeAttributeViewKey: { path: API_ENDPOINTS.AV_REMOVE_KEY, write: true },
+    sortAttributeViewKey: { path: API_ENDPOINTS.AV_SORT_KEY, write: true },
+    sortAttributeViewViewKey: { path: API_ENDPOINTS.AV_SORT_VIEW_KEY, write: true },
+    addAttributeViewBlocks: { path: API_ENDPOINTS.AV_ADD_ROWS, write: true },
+    removeAttributeViewBlocks: { path: API_ENDPOINTS.AV_REMOVE_ROWS, write: true },
+    changeAttrViewLayout: { path: API_ENDPOINTS.AV_CHANGE_LAYOUT, write: true },
+    setDatabaseBlockView: { path: API_ENDPOINTS.AV_SET_VIEW, write: true },
+    duplicateAttributeViewBlock: { path: API_ENDPOINTS.AV_DUPLICATE, write: true },
+    appendAttributeViewDetachedBlocksWithValues: { path: API_ENDPOINTS.AV_APPEND_DETACHED_ROWS, write: true },
+    setAttrViewGroup: { path: API_ENDPOINTS.AV_SET_GROUP, write: true },
+    batchReplaceAttributeViewBlocks: { path: API_ENDPOINTS.AV_BATCH_REPLACE_BLOCKS, write: true }
+};
+
+async function resolveAttributeViewHostBlocks(avID) {
+    assertNonEmptyString(avID, 'avID');
+    const marker = escapeSqlValue(`data-av-id="${avID}"`);
+    const rows = await executeSiyuanQuery(`
+        SELECT id, root_id, box, path, hpath, updated
+        FROM blocks
+        WHERE type = 'av'
+        AND instr(markdown, '${marker}') > 0
+        ORDER BY updated DESC
+    `);
+
+    return rows
+        .filter((row) => row && row.id && row.root_id)
+        .map((row) => ({
+            blockId: row.id,
+            rootDocId: row.root_id,
+            box: row.box || '',
+            path: row.path || '',
+            hpath: row.hpath || '',
+            updated: row.updated || ''
+        }));
+}
+
+async function collectAttributeViewWriteDocIds(payload, operationName) {
+    ensureWriteEnabled();
+    const docIds = new Set();
+
+    const addDocId = (docId) => {
+        if (isLikelyBlockId(docId)) {
+            docIds.add(docId);
+        }
+    };
+
+    if (payload && typeof payload.avID === 'string' && payload.avID.trim()) {
+        const hosts = await resolveAttributeViewHostBlocks(payload.avID.trim());
+        if (hosts.length === 0) {
+            throw new Error(`未找到属性视图对应的数据库块: ${payload.avID}`);
+        }
+
+        for (const host of hosts) {
+            const rootDocId = await ensureBlockReadBeforeWrite(host.blockId, operationName);
+            addDocId(rootDocId);
+        }
+    }
+
+    for (const key of ['blockID', 'id']) {
+        const value = payload && typeof payload[key] === 'string' ? payload[key].trim() : '';
+        if (!value || !isLikelyBlockId(value)) {
+            continue;
+        }
+
+        const rootDocId = await ensureBlockReadBeforeWrite(value, operationName);
+        addDocId(rootDocId);
+    }
+
+    return Array.from(docIds);
+}
+
+async function callAttributeViewApi(operationName, payload = {}) {
+    const spec = ATTRIBUTE_VIEW_API_SPECS[operationName];
+    if (!spec) {
+        throw new Error(`不支持的属性视图操作: ${operationName}`);
+    }
+
+    const safePayload = payload && typeof payload === 'object' ? payload : {};
+    let touchedDocIds = [];
+    if (spec.write) {
+        touchedDocIds = await collectAttributeViewWriteDocIds(safePayload, `av/${operationName}`);
+        if (typeof safePayload.avID === 'string' && safePayload.avID.trim()) {
+            await requestSiyuanApi(API_ENDPOINTS.AV_RENDER, {
+                id: safePayload.avID.trim(),
+                createIfNotExist: true
+            }, { requireAuth: true });
+        }
+    }
+
+    const data = await requestSiyuanApi(spec.path, safePayload, { requireAuth: true });
+
+    if (spec.write) {
+        for (const docId of touchedDocIds) {
+            await refreshDocumentVersion(docId);
+        }
+        return normalizeAttributeViewWriteResult(operationName, safePayload, data, touchedDocIds);
+    }
+
+    return data;
+}
+
+function summarizeAttributeViewPayload(payload = {}) {
+    if (!payload || typeof payload !== 'object') {
+        return {};
+    }
+
+    const summary = {};
+    const stringKeys = [
+        'avID', 'id', 'blockID', 'keyID', 'itemID', 'viewID', 'groupID',
+        'targetGroupID', 'previousID', 'nextID', 'layoutType'
+    ];
+    for (const key of stringKeys) {
+        if (typeof payload[key] === 'string' && payload[key].trim()) {
+            summary[key] = payload[key].trim();
+        }
+    }
+
+    if (Array.isArray(payload.srcs)) {
+        summary.srcCount = payload.srcs.length;
+    }
+    if (Array.isArray(payload.srcIDs)) {
+        summary.srcIDCount = payload.srcIDs.length;
+    }
+    if (Array.isArray(payload.values)) {
+        summary.valueCount = payload.values.length;
+    }
+    if (Array.isArray(payload.transactions)) {
+        summary.transactionCount = payload.transactions.length;
+    }
+    if (payload.removeRelationDest === true) {
+        summary.removeRelationDest = true;
+    }
+    if (payload.ignoreDefaultFill === true) {
+        summary.ignoreDefaultFill = true;
+    }
+    if (typeof payload.pageSize === 'number') {
+        summary.pageSize = payload.pageSize;
+    }
+    if (typeof payload.page === 'number') {
+        summary.page = payload.page;
+    }
+    if (typeof payload.query === 'string' && payload.query.trim()) {
+        summary.query = payload.query;
+    }
+    return summary;
+}
+
+function normalizeAttributeViewWriteResult(operationName, payload, data, touchedDocIds = []) {
+    const base = {
+        success: true,
+        state: 'applied',
+        operation: operationName,
+        request: summarizeAttributeViewPayload(payload),
+        touchedDocIds: Array.isArray(touchedDocIds) ? touchedDocIds : []
+    };
+
+    if (typeof data === 'undefined' || data === null) {
+        return {
+            ...base,
+            data: null,
+            resultType: 'empty'
+        };
+    }
+
+    if (Array.isArray(data)) {
+        return {
+            ...base,
+            data,
+            resultType: 'array',
+            resultCount: data.length
+        };
+    }
+
+    if (typeof data === 'object') {
+        return {
+            ...base,
+            ...data,
+            data,
+            resultType: 'object'
+        };
+    }
+
+    return {
+        ...base,
+        data,
+        resultType: typeof data
+    };
+}
+
+function extractTransactionOperations(apiResult) {
+    if (!Array.isArray(apiResult)) {
+        return [];
+    }
+
+    const operations = [];
+    for (const tx of apiResult) {
+        if (!tx || typeof tx !== 'object') {
+            continue;
+        }
+        const doOperations = Array.isArray(tx.doOperations) ? tx.doOperations : [];
+        for (const op of doOperations) {
+            if (op && typeof op === 'object') {
+                operations.push(op);
+            }
+        }
+    }
+    return operations;
+}
+
+function summarizeWriteRequest(fields = {}) {
+    const summary = {};
+    for (const [key, value] of Object.entries(fields || {})) {
+        if (typeof value === 'undefined' || value === null) {
+            continue;
+        }
+        if (typeof value === 'string') {
+            if (!value.trim()) {
+                continue;
+            }
+            summary[key] = value;
+            continue;
+        }
+        if (Array.isArray(value)) {
+            summary[key] = value;
+            continue;
+        }
+        if (typeof value === 'object') {
+            summary[key] = value;
+            continue;
+        }
+        summary[key] = value;
+    }
+    return summary;
+}
+
+function normalizeGeneralWriteResult(operation, request, rawData, extra = {}) {
+    const operations = extractTransactionOperations(rawData);
+    return {
+        success: true,
+        state: 'applied',
+        operation,
+        request: summarizeWriteRequest(request),
+        rawData,
+        rawResultType: Array.isArray(rawData) ? 'transaction_array' : (rawData === null ? 'empty' : typeof rawData),
+        transactionCount: Array.isArray(rawData) ? rawData.length : 0,
+        operationCount: operations.length,
+        ...extra
+    };
+}
+
+function createSyntheticNodeId(prefix = 'node') {
+    const now = new Date();
+    const pad = (value, width = 2) => String(value).padStart(width, '0');
+    const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const rand = Math.random().toString(36).slice(2, 9);
+    return `${timestamp}-${String(prefix || 'id').slice(0, 3)}${rand.slice(0, 4)}`;
+}
+
+async function collectTransactionWriteDocIds(transactions) {
+    ensureWriteEnabled();
+    const docIds = new Set();
+    const avIdsToResolve = new Set();
+    const blockIdsToResolve = new Set();
+
+    for (const tx of transactions) {
+        const ops = Array.isArray(tx?.doOperations) ? tx.doOperations : [];
+        for (const op of ops) {
+            if (!op || typeof op !== 'object') {
+                continue;
+            }
+
+            if (typeof op.avID === 'string' && op.avID.trim()) {
+                avIdsToResolve.add(op.avID.trim());
+            }
+            if (op.action === 'updateAttrViewColRelation' && typeof op.id === 'string' && op.id.trim()) {
+                avIdsToResolve.add(op.id.trim());
+            }
+            if (typeof op.blockID === 'string' && op.blockID.trim()) {
+                blockIdsToResolve.add(op.blockID.trim());
+            }
+            if (op.action === 'doUpdateUpdated' && typeof op.id === 'string' && op.id.trim()) {
+                blockIdsToResolve.add(op.id.trim());
+            }
+        }
+    }
+
+    for (const avID of avIdsToResolve) {
+        const hosts = await resolveAttributeViewHostBlocks(avID);
+        if (hosts.length === 0) {
+            throw new Error(`未找到属性视图对应的数据库块: ${avID}`);
+        }
+        for (const host of hosts) {
+            const rootDocId = await ensureBlockReadBeforeWrite(host.blockId, 'transactions/attrview');
+            if (isLikelyBlockId(rootDocId)) {
+                docIds.add(rootDocId);
+            }
+        }
+    }
+
+    for (const blockId of blockIdsToResolve) {
+        if (!isLikelyBlockId(blockId)) {
+            continue;
+        }
+        try {
+            const rootDocId = await ensureBlockReadBeforeWrite(blockId, 'transactions/block');
+            if (isLikelyBlockId(rootDocId)) {
+                docIds.add(rootDocId);
+            }
+        } catch (_) {
+            // Ignore non-block IDs that happen to match the pattern but are not persisted blocks.
+        }
+    }
+
+    return Array.from(docIds);
+}
+
+async function performTransactions(transactions, options = {}) {
+    if (!Array.isArray(transactions) || transactions.length === 0) {
+        throw new Error('transactions 不能为空');
+    }
+
+    const touchedDocIds = await collectTransactionWriteDocIds(transactions);
+    const reqId = Date.now();
+    const data = await requestSiyuanApi(API_ENDPOINTS.TRANSACTIONS, {
+        session: options.session || 'siyuan-notes-skill',
+        app: options.app || 'siyuan-notes-skill',
+        reqId,
+        transactions
+    }, { requireAuth: true });
+
+    for (const docId of touchedDocIds) {
+        await refreshDocumentVersion(docId);
+    }
+
+    return data;
+}
+
+async function addAttributeViewRows(payload = {}) {
+    if (!payload || typeof payload !== 'object') {
+        throw new Error('payload 必须是对象');
+    }
+    if (!Array.isArray(payload.srcs) || payload.srcs.length === 0) {
+        throw new Error('srcs 不能为空');
+    }
+
+    const detachedSrcs = payload.srcs.filter((src) => src && src.isDetached !== false);
+    const attachedSrcs = payload.srcs.filter((src) => src && src.isDetached === false);
+    const calls = [];
+
+    if (detachedSrcs.length > 0) {
+        calls.push(await callAttributeViewApi('addAttributeViewBlocks', {
+            ...payload,
+            srcs: detachedSrcs
+        }));
+    }
+
+    for (const src of attachedSrcs) {
+        calls.push(await callAttributeViewApi('addAttributeViewBlocks', {
+            ...payload,
+            srcs: [src]
+        }));
+    }
+
+    return {
+        mode: attachedSrcs.length > 1 ? 'split-attached-rows' : 'single-call',
+        detachedCount: detachedSrcs.length,
+        attachedCount: attachedSrcs.length,
+        calls
+    };
+}
+
+async function addAttributeViewRelationKey(options = {}) {
+    const {
+        sourceAvID,
+        keyID = createSyntheticNodeId('rel'),
+        name,
+        targetAvID,
+        twoWay = false,
+        backRelationKeyID = createSyntheticNodeId('rel'),
+        backRelationName = '',
+        keyIcon = '',
+        previousKeyID = ''
+    } = options;
+
+    assertNonEmptyString(sourceAvID, 'sourceAvID');
+    assertNonEmptyString(name, 'name');
+    assertNonEmptyString(targetAvID, 'targetAvID');
+
+    await callAttributeViewApi('addAttributeViewKey', {
+        avID: sourceAvID,
+        keyID,
+        keyName: name,
+        keyType: 'relation',
+        keyIcon,
+        previousKeyID
+    });
+
+    const transactions = [{
+        doOperations: [{
+            action: 'updateAttrViewColRelation',
+            avID: sourceAvID,
+            keyID,
+            id: targetAvID,
+            backRelationKeyID: twoWay ? backRelationKeyID : createSyntheticNodeId('rel'),
+            isTwoWay: !!twoWay,
+            name: backRelationName,
+            format: name
+        }]
+    }];
+
+    await performTransactions(transactions);
+    return {
+        keyID,
+        backRelationKeyID: twoWay ? backRelationKeyID : '',
+        transactions
+    };
+}
+
+async function addAttributeViewRollupKey(options = {}) {
+    const {
+        avID,
+        keyID = createSyntheticNodeId('rol'),
+        name,
+        relationKeyID,
+        targetKeyID,
+        calcOperator = ''
+    } = options;
+
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(name, 'name');
+    assertNonEmptyString(relationKeyID, 'relationKeyID');
+    assertNonEmptyString(targetKeyID, 'targetKeyID');
+
+    await callAttributeViewApi('addAttributeViewKey', {
+        avID,
+        keyID,
+        keyName: name,
+        keyType: 'rollup',
+        keyIcon: '',
+        previousKeyID: ''
+    });
+
+    const data = {};
+    if (calcOperator) {
+        data.calc = { operator: calcOperator };
+    }
+    const transactions = [{
+        doOperations: [{
+            action: 'updateAttrViewColRollup',
+            id: keyID,
+            avID,
+            parentID: relationKeyID,
+            keyID: targetKeyID,
+            data
+        }]
+    }];
+
+    await performTransactions(transactions);
+    return {
+        keyID,
+        transactions
+    };
+}
+
+function flattenAttributeViewRows(view) {
+    const rows = [];
+    if (Array.isArray(view?.rows)) {
+        rows.push(...view.rows);
+    }
+    if (Array.isArray(view?.groups)) {
+        for (const group of view.groups) {
+            rows.push(...flattenAttributeViewRows(group));
+        }
+    }
+    return rows;
+}
+
+async function getAttributeViewRowAndCell(avID, keyID, itemID) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(keyID, 'keyID');
+    assertNonEmptyString(itemID, 'itemID');
+
+    const rendered = await callAttributeViewApi('renderAttributeView', {
+        id: avID,
+        pageSize: -1
+    });
+    const rows = flattenAttributeViewRows(rendered.view);
+    const row = rows.find((candidate) => candidate && candidate.id === itemID);
+    if (!row) {
+        throw new Error(`未找到属性视图行: ${itemID}`);
+    }
+
+    const cell = (row.cells || []).find((candidate) => candidate?.value?.keyID === keyID);
+    if (!cell || !cell.value) {
+        throw new Error(`未找到属性视图单元格: row=${itemID}, key=${keyID}`);
+    }
+
+    return {
+        rendered,
+        row,
+        cell
+    };
+}
+
+function normalizeAttributeViewTextValue(value) {
+    return String(value ?? '');
+}
+
+function buildAttributeViewTextCellValue(baseValue, keyID, itemID, text) {
+    const value = JSON.parse(JSON.stringify(baseValue || {}));
+    value.type = 'text';
+    value.keyID = keyID;
+    value.blockID = itemID;
+    value.text = {
+        content: normalizeAttributeViewTextValue(text)
+    };
+    return value;
+}
+
+function buildAttributeViewNumberCellValue(baseValue, keyID, itemID, numberValue, { clear = false } = {}) {
+    const value = JSON.parse(JSON.stringify(baseValue || {}));
+    value.type = 'number';
+    value.keyID = keyID;
+    value.blockID = itemID;
+    if (clear) {
+        value.number = {
+            content: 0,
+            isNotEmpty: false
+        };
+        return value;
+    }
+
+    const parsed = typeof numberValue === 'number' ? numberValue : Number(String(numberValue || '').trim());
+    if (!Number.isFinite(parsed)) {
+        throw new Error(`无效数字: ${numberValue}`);
+    }
+
+    value.number = {
+        content: parsed,
+        isNotEmpty: true
+    };
+    return value;
+}
+
+function parseAttributeViewDateInput(input) {
+    const raw = String(input || '').trim();
+    const match = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(raw);
+    if (!match) {
+        throw new Error(`无效日期格式: ${input}，支持 YYYY-MM-DD 或 YYYY-MM-DDTHH:mm[:ss]`);
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = Number(match[4] || 0);
+    const minute = Number(match[5] || 0);
+    const second = Number(match[6] || 0);
+    const date = new Date(year, month - 1, day, hour, minute, second, 0);
+    if (
+        date.getFullYear() !== year ||
+        date.getMonth() !== month - 1 ||
+        date.getDate() !== day ||
+        date.getHours() !== hour ||
+        date.getMinutes() !== minute ||
+        date.getSeconds() !== second
+    ) {
+        throw new Error(`无效日期值: ${input}`);
+    }
+
+    return {
+        millis: date.getTime(),
+        isNotTime: typeof match[4] === 'undefined'
+    };
+}
+
+function buildAttributeViewDateCellValue(baseValue, keyID, itemID, dateInput, { clear = false } = {}) {
+    const value = JSON.parse(JSON.stringify(baseValue || {}));
+    value.type = 'date';
+    value.keyID = keyID;
+    value.blockID = itemID;
+    if (clear) {
+        value.date = {
+            content: 0,
+            isNotEmpty: false,
+            content2: 0,
+            isNotEmpty2: false,
+            hasEndDate: false,
+            isNotTime: true,
+            formattedContent: ''
+        };
+        return value;
+    }
+
+    const normalized = parseAttributeViewDateInput(dateInput);
+    value.date = {
+        content: normalized.millis,
+        isNotEmpty: true,
+        content2: 0,
+        isNotEmpty2: false,
+        hasEndDate: false,
+        isNotTime: normalized.isNotTime,
+        formattedContent: ''
+    };
+    return value;
+}
+
+function buildAttributeViewSelectCellValue(baseValue, keyID, itemID, optionName, { color = '1', clear = false } = {}) {
+    const value = JSON.parse(JSON.stringify(baseValue || {}));
+    value.type = 'select';
+    value.keyID = keyID;
+    value.blockID = itemID;
+    if (clear) {
+        value.mSelect = [];
+        return value;
+    }
+
+    const normalizedName = String(optionName || '').trim();
+    if (!normalizedName) {
+        throw new Error('select 值不能为空');
+    }
+
+    value.mSelect = [{
+        content: normalizedName,
+        color: String(color || '1')
+    }];
+    return value;
+}
+
+function cloneJsonValue(value) {
+    if (typeof value === 'undefined') {
+        return undefined;
+    }
+    return JSON.parse(JSON.stringify(value));
+}
+
+function parseBooleanLike(value, fieldName = '布尔值') {
+    if (typeof value === 'boolean') {
+        return value;
+    }
+
+    const raw = String(value ?? '').trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on', 'checked', '是'].includes(raw)) {
+        return true;
+    }
+    if (['false', '0', 'no', 'n', 'off', 'unchecked', '否'].includes(raw)) {
+        return false;
+    }
+    throw new Error(`${fieldName} 必须是 true/false`);
+}
+
+function normalizeAttributeViewColumnOption(option, { defaultColor = '1' } = {}) {
+    if (typeof option === 'string') {
+        const name = option.trim();
+        if (!name) {
+            throw new Error('选项名不能为空');
+        }
+        return {
+            name,
+            color: String(defaultColor || '1')
+        };
+    }
+
+    if (!option || typeof option !== 'object') {
+        throw new Error('选项必须是字符串或对象');
+    }
+
+    const name = String(option.name ?? option.content ?? '').trim();
+    if (!name) {
+        throw new Error('选项名不能为空');
+    }
+
+    const normalized = {
+        name,
+        color: String(option.color ?? defaultColor ?? '1')
+    };
+    const desc = String(option.desc ?? '').trim();
+    if (desc) {
+        normalized.desc = desc;
+    }
+    return normalized;
+}
+
+function normalizeAttributeViewSelectValues(options, { defaultColor = '1' } = {}) {
+    if (!Array.isArray(options)) {
+        throw new Error('options 必须是数组');
+    }
+
+    const normalized = [];
+    const seen = new Set();
+    for (const option of options) {
+        const normalizedOption = normalizeAttributeViewColumnOption(option, { defaultColor });
+        if (seen.has(normalizedOption.name)) {
+            continue;
+        }
+        seen.add(normalizedOption.name);
+        normalized.push({
+            content: normalizedOption.name,
+            color: normalizedOption.color
+        });
+    }
+    return normalized;
+}
+
+function buildAttributeViewCheckboxCellValue(baseValue, keyID, itemID, checked) {
+    const value = cloneJsonValue(baseValue || {});
+    value.type = 'checkbox';
+    value.keyID = keyID;
+    value.blockID = itemID;
+    value.checkbox = {
+        checked: parseBooleanLike(checked, 'checkbox')
+    };
+    return value;
+}
+
+function buildAttributeViewMultiSelectCellValue(baseValue, keyID, itemID, options, { clear = false, defaultColor = '1' } = {}) {
+    const value = cloneJsonValue(baseValue || {});
+    value.type = 'mSelect';
+    value.keyID = keyID;
+    value.blockID = itemID;
+    if (clear) {
+        value.mSelect = [];
+        return value;
+    }
+
+    const normalized = normalizeAttributeViewSelectValues(options, { defaultColor });
+    if (normalized.length === 0) {
+        throw new Error('mSelect 值不能为空');
+    }
+    value.mSelect = normalized;
+    return value;
+}
+
+function buildAttributeViewStringCellValue(type, fieldName, baseValue, keyID, itemID, content) {
+    const value = cloneJsonValue(baseValue || {});
+    value.type = type;
+    value.keyID = keyID;
+    value.blockID = itemID;
+    value[fieldName] = {
+        content: String(content ?? '')
+    };
+    return value;
+}
+
+function inferAssetEntryType(assetPath) {
+    const ext = path.extname(String(assetPath || '')).toLowerCase();
+    if (/\.(png|jpg|jpeg|gif|webp|bmp|svg)$/i.test(ext)) {
+        return 'image';
+    }
+    return 'file';
+}
+
+async function resolveAssetCellEntries(sources, options = {}) {
+    if (!Array.isArray(sources) || sources.length === 0) {
+        throw new Error('sources 不能为空');
+    }
+
+    const entries = [];
+    const uploadedPaths = [];
+    for (const rawSource of sources) {
+        const source = String(rawSource || '').trim();
+        if (!source) {
+            continue;
+        }
+
+        const resolvedPath = path.resolve(source);
+        if (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isFile()) {
+            const upload = await uploadAssets([resolvedPath], {
+                assetsDirPath: options.assetsDirPath || '',
+                skipIfDuplicated: !!options.skipIfDuplicated
+            });
+            const assetPath = Object.values(upload.succMap || {}).map((item) => String(item || '').trim()).find(Boolean);
+            if (!assetPath) {
+                throw new Error(`资源上传成功但未返回路径: ${resolvedPath}`);
+            }
+            uploadedPaths.push(assetPath);
+            entries.push({
+                content: assetPath,
+                name: path.basename(assetPath),
+                type: inferAssetEntryType(assetPath)
+            });
+            continue;
+        }
+
+        entries.push({
+            content: source,
+            name: path.basename(source),
+            type: inferAssetEntryType(source)
+        });
+    }
+
+    if (entries.length === 0) {
+        throw new Error('未解析到任何资源');
+    }
+
+    return {
+        entries,
+        uploadedPaths
+    };
+}
+
+function buildAttributeViewAssetCellValue(baseValue, keyID, itemID, assets, { clear = false } = {}) {
+    const value = cloneJsonValue(baseValue || {});
+    value.type = 'mAsset';
+    value.keyID = keyID;
+    value.blockID = itemID;
+    if (clear) {
+        value.mAsset = [];
+        return value;
+    }
+
+    if (!Array.isArray(assets) || assets.length === 0) {
+        throw new Error('assets 不能为空');
+    }
+
+    value.mAsset = assets.map((asset) => ({
+        content: String(asset.content || '').trim(),
+        name: String(asset.name || path.basename(String(asset.content || '')) || '').trim(),
+        type: asset.type === 'image' ? 'image' : 'file'
+    })).filter((asset) => asset.content && asset.name);
+    if (value.mAsset.length === 0) {
+        throw new Error('assets 不能为空');
+    }
+    return value;
+}
+
+async function getBlockCellSourceInfo(blockId) {
+    assertNonEmptyString(blockId, 'blockId');
+    const rows = await executeSiyuanQuery(`
+        SELECT id, content
+        FROM blocks
+        WHERE id = '${escapeSqlValue(blockId)}'
+        LIMIT 1
+    `);
+    if (!rows.length) {
+        throw new Error(`未找到目标块: ${blockId}`);
+    }
+
+    return {
+        id: rows[0].id,
+        content: rows[0].content || ''
+    };
+}
+
+function buildAttributeViewBlockCellValue(baseValue, keyID, itemID, blockInfo, { clear = false } = {}) {
+    const value = cloneJsonValue(baseValue || {});
+    value.type = 'block';
+    value.keyID = keyID;
+    value.blockID = itemID;
+    if (clear) {
+        value.block = {
+            id: '',
+            content: ''
+        };
+        return value;
+    }
+
+    value.block = {
+        id: String(blockInfo?.id || '').trim(),
+        content: String(blockInfo?.content || '')
+    };
+    if (blockInfo?.icon) {
+        value.block.icon = String(blockInfo.icon);
+    }
+    return value;
+}
+
+async function getAttributeViewDefinition(avID) {
+    assertNonEmptyString(avID, 'avID');
+    const data = await callAttributeViewApi('getAttributeView', { id: avID });
+    const attributeView = data?.av || data;
+    if (!attributeView || typeof attributeView !== 'object') {
+        throw new Error(`未找到属性视图定义: ${avID}`);
+    }
+    return attributeView;
+}
+
+async function getAttributeViewKeyDetails(avID, keyID) {
+    assertNonEmptyString(keyID, 'keyID');
+    const attributeView = await getAttributeViewDefinition(avID);
+    const keyValues = Array.isArray(attributeView.keyValues) ? attributeView.keyValues : [];
+    const keyValue = keyValues.find((item) => item?.key?.id === keyID);
+    if (!keyValue?.key) {
+        throw new Error(`未找到属性视图字段: ${keyID}`);
+    }
+    return {
+        attributeView,
+        keyValue,
+        key: keyValue.key
+    };
+}
+
+async function getAttributeViewViewDetails(avID, viewID) {
+    assertNonEmptyString(viewID, 'viewID');
+    const attributeView = await getAttributeViewDefinition(avID);
+    const views = Array.isArray(attributeView.views) ? attributeView.views : [];
+    const view = views.find((item) => item?.id === viewID);
+    if (!view) {
+        throw new Error(`未找到属性视图视图: ${viewID}`);
+    }
+    return {
+        attributeView,
+        view
+    };
+}
+
+async function discoverAttributeViewsInDocument(docId) {
+    assertNonEmptyString(docId, 'docId');
+    const blocks = await getDocumentBlocks(docId);
+    const results = [];
+    for (const block of blocks) {
+        if (!block || block.type !== 'av') {
+            continue;
+        }
+        const markdown = String(block.markdown || '');
+        const avID = /data-av-id="([^"]+)"/.exec(markdown)?.[1] || '';
+        if (!avID) {
+            continue;
+        }
+        results.push({
+            docId,
+            blockId: block.id,
+            avID,
+            markdown
+        });
+    }
+    return results;
+}
+
+async function resolvePrimaryAttributeViewBlockID(avID) {
+    const hosts = await resolveAttributeViewHostBlocks(avID);
+    if (hosts.length === 0) {
+        throw new Error(`未找到属性视图对应的数据库块: ${avID}`);
+    }
+    return hosts[0].blockId;
+}
+
+async function resolveAttributeViewBlockContext(avID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    let blockID = String(options.blockID || '').trim();
+    if (!blockID) {
+        blockID = await resolvePrimaryAttributeViewBlockID(avID);
+    }
+
+    const viewID = String(options.viewID || '').trim();
+    if (viewID) {
+        await callAttributeViewApi('setDatabaseBlockView', {
+            id: blockID,
+            avID,
+            viewID
+        });
+    }
+
+    return {
+        blockID,
+        viewID
+    };
+}
+
+function normalizeCardSize(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    if (raw === '0' || raw === 'small') {
+        return 0;
+    }
+    if (raw === '1' || raw === 'medium') {
+        return 1;
+    }
+    if (raw === '2' || raw === 'large') {
+        return 2;
+    }
+    throw new Error(`无效卡片尺寸: ${value}`);
+}
+
+function normalizeCardAspectRatio(value) {
+    const raw = String(value || '').trim();
+    const map = new Map([
+        ['16:9', 0],
+        ['9:16', 1],
+        ['4:3', 2],
+        ['3:4', 3],
+        ['3:2', 4],
+        ['2:3', 5],
+        ['1:1', 6],
+        ['0', 0],
+        ['1', 1],
+        ['2', 2],
+        ['3', 3],
+        ['4', 4],
+        ['5', 5],
+        ['6', 6]
+    ]);
+    if (!map.has(raw)) {
+        throw new Error(`无效卡片比例: ${value}`);
+    }
+    return map.get(raw);
+}
+
+function normalizeCoverFrom(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    if (['0', 'none'].includes(raw)) {
+        return 0;
+    }
+    if (['1', 'content-image', 'image', 'contentimage'].includes(raw)) {
+        return 1;
+    }
+    if (['2', 'asset', 'asset-field', 'assetfield'].includes(raw)) {
+        return 2;
+    }
+    if (['3', 'content-block', 'block', 'contentblock'].includes(raw)) {
+        return 3;
+    }
+    throw new Error(`无效封面来源: ${value}`);
+}
+
+async function getAttributeViewCellBaseValue(avID, keyID, itemID) {
+    const { key } = await getAttributeViewKeyDetails(avID, keyID);
+    try {
+        const { cell } = await getAttributeViewRowAndCell(avID, keyID, itemID);
+        return {
+            key,
+            value: cloneJsonValue(cell.value || {})
+        };
+    } catch (error) {
+        if (
+            error &&
+            typeof error.message === 'string' &&
+            (error.message.startsWith('未找到属性视图行:') || error.message.startsWith('未找到属性视图单元格:'))
+        ) {
+            return {
+                key,
+                value: {
+                    keyID,
+                    blockID: itemID,
+                    type: key.type
+                }
+            };
+        }
+        throw error;
+    }
+}
+
+async function setAttributeViewTextCell(avID, keyID, itemID, text) {
+    const { value: baseValue } = await getAttributeViewCellBaseValue(avID, keyID, itemID);
+    const value = buildAttributeViewTextCellValue(baseValue, keyID, itemID, text);
+    return await callAttributeViewApi('setAttributeViewBlockAttr', { avID, keyID, itemID, value });
+}
+
+async function setAttributeViewNumberCell(avID, keyID, itemID, numberValue, options = {}) {
+    const { value: baseValue } = await getAttributeViewCellBaseValue(avID, keyID, itemID);
+    const value = buildAttributeViewNumberCellValue(baseValue, keyID, itemID, numberValue, options);
+    return await callAttributeViewApi('setAttributeViewBlockAttr', { avID, keyID, itemID, value });
+}
+
+async function setAttributeViewDateCell(avID, keyID, itemID, dateInput, options = {}) {
+    const { value: baseValue } = await getAttributeViewCellBaseValue(avID, keyID, itemID);
+    const value = buildAttributeViewDateCellValue(baseValue, keyID, itemID, dateInput, options);
+    return await callAttributeViewApi('setAttributeViewBlockAttr', { avID, keyID, itemID, value });
+}
+
+async function setAttributeViewSelectCell(avID, keyID, itemID, optionName, options = {}) {
+    const { value: baseValue } = await getAttributeViewCellBaseValue(avID, keyID, itemID);
+    const value = buildAttributeViewSelectCellValue(baseValue, keyID, itemID, optionName, options);
+    return await callAttributeViewApi('setAttributeViewBlockAttr', { avID, keyID, itemID, value });
+}
+
+async function addAttributeViewDocRows(avID, docIds, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    if (!Array.isArray(docIds) || docIds.length === 0) {
+        throw new Error('docIds 不能为空');
+    }
+
+    const uniqueDocIds = [...new Set(docIds.map((item) => String(item || '').trim()).filter(Boolean))];
+    if (uniqueDocIds.length === 0) {
+        throw new Error('docIds 不能为空');
+    }
+
+    const safeIds = uniqueDocIds.map((id) => `'${escapeSqlValue(id)}'`).join(', ');
+    const rows = await executeSiyuanQuery(`
+        SELECT id, type
+        FROM blocks
+        WHERE id IN (${safeIds})
+    `);
+    const typeMap = new Map(rows.map((row) => [row.id, row.type]));
+    for (const docId of uniqueDocIds) {
+        if (typeMap.get(docId) !== 'd') {
+            throw new Error(`目标不是文档块或不存在: ${docId}`);
+        }
+    }
+
+    let blockID = String(options.blockID || '').trim();
+    if (!blockID) {
+        const hosts = await resolveAttributeViewHostBlocks(avID);
+        if (hosts.length === 0) {
+            throw new Error(`未找到属性视图对应的数据库块: ${avID}`);
+        }
+        blockID = hosts[0].blockId;
+    }
+
+    const srcs = uniqueDocIds.map((docId) => ({
+        itemID: createSyntheticNodeId('row'),
+        id: docId,
+        isDetached: false
+    }));
+
+    return await addAttributeViewRows({
+        avID,
+        blockID,
+        viewID: options.viewID || '',
+        groupID: options.groupID || '',
+        previousID: options.previousID || '',
+        ignoreDefaultFill: !!options.ignoreDefaultFill,
+        srcs
+    });
+}
+
+async function setAttributeViewRelationCell(options = {}) {
+    const {
+        avID,
+        keyID,
+        itemID,
+        targetAvID,
+        targetRowIDs
+    } = options;
+
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(keyID, 'keyID');
+    assertNonEmptyString(itemID, 'itemID');
+    assertNonEmptyString(targetAvID, 'targetAvID');
+    if (!Array.isArray(targetRowIDs) || targetRowIDs.length === 0) {
+        throw new Error('targetRowIDs 不能为空');
+    }
+
+    const rendered = await callAttributeViewApi('renderAttributeView', {
+        id: targetAvID,
+        pageSize: -1
+    });
+    const rows = flattenAttributeViewRows(rendered.view);
+    const rowMap = new Map(rows.map((row) => [row.id, row]));
+    const blockIDs = [];
+    const contents = [];
+
+    for (const rowID of targetRowIDs) {
+        const row = rowMap.get(rowID);
+        if (!row) {
+            throw new Error(`未找到关系目标行: ${rowID}`);
+        }
+        const blockCell = (row.cells || []).find((cell) => cell.valueType === 'block');
+        if (!blockCell || !blockCell.value) {
+            throw new Error(`关系目标行缺少主键块单元格: ${rowID}`);
+        }
+        blockIDs.push(rowID);
+        contents.push({
+            type: 'block',
+            block: {
+                id: blockCell.value.block?.id,
+                content: blockCell.value.block?.content || ''
+            },
+            isDetached: !!blockCell.value.isDetached
+        });
+    }
+
+    return await callAttributeViewApi('setAttributeViewBlockAttr', {
+        avID,
+        keyID,
+        itemID,
+        value: {
+            type: 'relation',
+            relation: {
+                blockIDs,
+                contents
+            }
+        }
+    });
+}
+
+async function clearAttributeViewRelationCell(avID, keyID, itemID) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(keyID, 'keyID');
+    assertNonEmptyString(itemID, 'itemID');
+    return await callAttributeViewApi('setAttributeViewBlockAttr', {
+        avID,
+        keyID,
+        itemID,
+        value: {
+            type: 'relation',
+            relation: {
+                blockIDs: [],
+                contents: []
+            }
+        }
+    });
+}
+
+async function setAttributeViewCheckboxCell(avID, keyID, itemID, checked) {
+    const { value: baseValue } = await getAttributeViewCellBaseValue(avID, keyID, itemID);
+    const value = buildAttributeViewCheckboxCellValue(baseValue, keyID, itemID, checked);
+    return await callAttributeViewApi('setAttributeViewBlockAttr', { avID, keyID, itemID, value });
+}
+
+async function setAttributeViewMultiSelectCell(avID, keyID, itemID, optionValues, options = {}) {
+    const { value: baseValue } = await getAttributeViewCellBaseValue(avID, keyID, itemID);
+    const value = buildAttributeViewMultiSelectCellValue(baseValue, keyID, itemID, optionValues, options);
+    return await callAttributeViewApi('setAttributeViewBlockAttr', { avID, keyID, itemID, value });
+}
+
+async function setAttributeViewUrlCell(avID, keyID, itemID, urlValue) {
+    const { value: baseValue } = await getAttributeViewCellBaseValue(avID, keyID, itemID);
+    const value = buildAttributeViewStringCellValue('url', 'url', baseValue, keyID, itemID, urlValue);
+    return await callAttributeViewApi('setAttributeViewBlockAttr', { avID, keyID, itemID, value });
+}
+
+async function setAttributeViewEmailCell(avID, keyID, itemID, emailValue) {
+    const { value: baseValue } = await getAttributeViewCellBaseValue(avID, keyID, itemID);
+    const value = buildAttributeViewStringCellValue('email', 'email', baseValue, keyID, itemID, emailValue);
+    return await callAttributeViewApi('setAttributeViewBlockAttr', { avID, keyID, itemID, value });
+}
+
+async function setAttributeViewPhoneCell(avID, keyID, itemID, phoneValue) {
+    const { value: baseValue } = await getAttributeViewCellBaseValue(avID, keyID, itemID);
+    const value = buildAttributeViewStringCellValue('phone', 'phone', baseValue, keyID, itemID, phoneValue);
+    return await callAttributeViewApi('setAttributeViewBlockAttr', { avID, keyID, itemID, value });
+}
+
+async function setAttributeViewTemplateCell(avID, keyID, templateValue) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(keyID, 'keyID');
+    await performTransactions([{
+        doOperations: [{
+            action: 'updateAttrViewColTemplate',
+            avID,
+            id: keyID,
+            data: String(templateValue || ''),
+            type: 'template'
+        }]
+    }]);
+    return {
+        avID,
+        keyID,
+        template: String(templateValue || '')
+    };
+}
+
+async function setAttributeViewAssetCell(avID, keyID, itemID, sources, options = {}) {
+    const { value: baseValue } = await getAttributeViewCellBaseValue(avID, keyID, itemID);
+    const resolved = options.clear ? { entries: [], uploadedPaths: [] } : await resolveAssetCellEntries(sources, options);
+    const value = buildAttributeViewAssetCellValue(baseValue, keyID, itemID, resolved.entries, options);
+    const result = await callAttributeViewApi('setAttributeViewBlockAttr', { avID, keyID, itemID, value });
+    return {
+        result,
+        uploadedPaths: resolved.uploadedPaths,
+        assets: resolved.entries
+    };
+}
+
+async function setAttributeViewBlockCell(avID, keyID, itemID, sourceBlockID, options = {}) {
+    const { value: baseValue } = await getAttributeViewCellBaseValue(avID, keyID, itemID);
+    const blockInfo = options.clear
+        ? null
+        : {
+            ...(await getBlockCellSourceInfo(sourceBlockID)),
+            ...(options.content ? { content: String(options.content) } : {})
+        };
+    const value = buildAttributeViewBlockCellValue(baseValue, keyID, itemID, blockInfo, options);
+    return await callAttributeViewApi('setAttributeViewBlockAttr', { avID, keyID, itemID, value });
+}
+
+async function addAttributeViewOption(avID, keyID, option) {
+    const { key } = await getAttributeViewKeyDetails(avID, keyID);
+    if (!['select', 'mSelect'].includes(key.type)) {
+        throw new Error(`字段 ${keyID} 不是 select/mSelect: ${key.type}`);
+    }
+
+    const existing = Array.isArray(key.options) ? cloneJsonValue(key.options) : [];
+    const normalized = normalizeAttributeViewColumnOption(option, {
+        defaultColor: String((existing.length % 14) + 1)
+    });
+    if (existing.some((item) => item?.name === normalized.name)) {
+        throw new Error(`选项已存在: ${normalized.name}`);
+    }
+
+    existing.push(normalized);
+    await performTransactions([{
+        doOperations: [{
+            action: 'updateAttrViewColOptions',
+            avID,
+            id: keyID,
+            data: existing
+        }]
+    }]);
+    return {
+        keyID,
+        option: normalized,
+        options: existing
+    };
+}
+
+async function updateAttributeViewOption(avID, keyID, oldName, option) {
+    const { key } = await getAttributeViewKeyDetails(avID, keyID);
+    if (!['select', 'mSelect'].includes(key.type)) {
+        throw new Error(`字段 ${keyID} 不是 select/mSelect: ${key.type}`);
+    }
+
+    assertNonEmptyString(oldName, 'oldName');
+    const normalized = normalizeAttributeViewColumnOption(option);
+    await performTransactions([{
+        doOperations: [{
+            action: 'updateAttrViewColOption',
+            avID,
+            id: keyID,
+            data: {
+                oldName,
+                newName: normalized.name,
+                newColor: normalized.color,
+                newDesc: normalized.desc || ''
+            }
+        }]
+    }]);
+    return {
+        keyID,
+        oldName,
+        option: normalized
+    };
+}
+
+async function removeAttributeViewOption(avID, keyID, optionName) {
+    const { key } = await getAttributeViewKeyDetails(avID, keyID);
+    if (!['select', 'mSelect'].includes(key.type)) {
+        throw new Error(`字段 ${keyID} 不是 select/mSelect: ${key.type}`);
+    }
+
+    assertNonEmptyString(optionName, 'optionName');
+    await performTransactions([{
+        doOperations: [{
+            action: 'removeAttrViewColOption',
+            avID,
+            id: keyID,
+            data: optionName
+        }]
+    }]);
+    return {
+        keyID,
+        optionName
+    };
+}
+
+async function updateAttributeViewRelationKey(options = {}) {
+    const {
+        avID,
+        keyID,
+        targetAvID = '',
+        twoWay,
+        backRelationKeyID = '',
+        backRelationName = '',
+        columnName = ''
+    } = options;
+
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(keyID, 'keyID');
+    const { key } = await getAttributeViewKeyDetails(avID, keyID);
+    if (key.type !== 'relation') {
+        throw new Error(`字段 ${keyID} 不是 relation: ${key.type}`);
+    }
+
+    const currentRelation = key.relation || {};
+    const resolvedTargetAvID = String(targetAvID || currentRelation.avID || '').trim();
+    if (!resolvedTargetAvID) {
+        throw new Error(`relation 字段 ${keyID} 缺少目标属性视图`);
+    }
+
+    const operation = {
+        action: 'updateAttrViewColRelation',
+        avID,
+        keyID,
+        id: resolvedTargetAvID,
+        backRelationKeyID: String(backRelationKeyID || currentRelation.backKeyID || createSyntheticNodeId('rel')),
+        isTwoWay: typeof twoWay === 'boolean' ? twoWay : !!currentRelation.isTwoWay,
+        name: String(backRelationName || ''),
+        format: String(columnName || key.name || '')
+    };
+
+    await performTransactions([{ doOperations: [operation] }]);
+    return operation;
+}
+
+async function updateAttributeViewRollupKey(options = {}) {
+    const {
+        avID,
+        keyID,
+        relationKeyID = '',
+        targetKeyID = '',
+        calcOperator = '',
+        clearCalc = false
+    } = options;
+
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(keyID, 'keyID');
+    const { key } = await getAttributeViewKeyDetails(avID, keyID);
+    if (key.type !== 'rollup') {
+        throw new Error(`字段 ${keyID} 不是 rollup: ${key.type}`);
+    }
+
+    const currentRollup = key.rollup || {};
+    const parentID = String(relationKeyID || currentRollup.relationKeyID || '').trim();
+    const destKeyID = String(targetKeyID || currentRollup.keyID || '').trim();
+    if (!parentID || !destKeyID) {
+        throw new Error(`rollup 字段 ${keyID} 缺少 relationKeyID 或 targetKeyID`);
+    }
+
+    const data = {};
+    if (!clearCalc) {
+        const currentOperator = currentRollup.calc?.operator || '';
+        const operator = String(calcOperator || currentOperator || '').trim();
+        if (operator) {
+            data.calc = { operator };
+        }
+    }
+
+    const operation = {
+        action: 'updateAttrViewColRollup',
+        avID,
+        id: keyID,
+        parentID,
+        keyID: destKeyID,
+        data
+    };
+    await performTransactions([{ doOperations: [operation] }]);
+    return operation;
+}
+
+async function getAttributeViewFilterSortState(avID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const payload = {
+        id: avID,
+        blockID
+    };
+    return await callAttributeViewApi('getAttributeViewFilterSort', payload);
+}
+
+async function setAttributeViewFilters(avID, filters, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    if (!Array.isArray(filters)) {
+        throw new Error('filters 必须是数组');
+    }
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewFilters',
+            avID,
+            blockID,
+            data: filters
+        }]
+    }]);
+    return { avID, blockID, filters };
+}
+
+async function setAttributeViewSorts(avID, sorts, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    if (!Array.isArray(sorts)) {
+        throw new Error('sorts 必须是数组');
+    }
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewSorts',
+            avID,
+            blockID,
+            data: sorts
+        }]
+    }]);
+    return { avID, blockID, sorts };
+}
+
+async function setAttributeViewGroup(avID, group, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    if (!group || typeof group !== 'object') {
+        throw new Error('group 必须是对象');
+    }
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    return await callAttributeViewApi('setAttrViewGroup', {
+        avID,
+        blockID,
+        group
+    });
+}
+
+async function resolveAttributeViewGroupContext(avID, groupID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(groupID, 'groupID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const rendered = await callAttributeViewApi('renderAttributeView', {
+        id: avID,
+        blockID,
+        pageSize: -1
+    });
+    const groups = Array.isArray(rendered?.view?.groups) ? rendered.view.groups : [];
+    const group = groups.find((item) => item && item.id === groupID);
+    if (!group) {
+        throw new Error(`未找到属性视图分组: ${groupID}`);
+    }
+    return {
+        blockID,
+        rendered,
+        groups,
+        group
+    };
+}
+
+async function removeAttributeViewGroup(avID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    await performTransactions([{
+        doOperations: [{
+            action: 'removeAttrViewGroup',
+            avID,
+            blockID
+        }]
+    }]);
+    return { avID, blockID };
+}
+
+async function hideAttributeViewGroup(avID, groupID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(groupID, 'groupID');
+    const { blockID } = await resolveAttributeViewGroupContext(avID, groupID, options);
+    const hidden = options.hidden === true;
+    await performTransactions([{
+        doOperations: [{
+            action: 'hideAttrViewGroup',
+            avID,
+            blockID,
+            id: groupID,
+            data: hidden ? 2 : 0
+        }]
+    }]);
+    return { avID, blockID, groupID, hidden };
+}
+
+async function hideAllAttributeViewGroups(avID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const hidden = options.hidden !== false;
+    await performTransactions([{
+        doOperations: [{
+            action: 'hideAttrViewAllGroups',
+            avID,
+            blockID,
+            data: hidden
+        }]
+    }]);
+    return { avID, blockID, hidden };
+}
+
+async function sortAttributeViewGroup(avID, groupID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(groupID, 'groupID');
+    const { blockID, groups } = await resolveAttributeViewGroupContext(avID, groupID, options);
+    const previousID = String(options.previousID || '');
+    if (previousID && !groups.some((group) => group && group.id === previousID)) {
+        throw new Error(`未找到前置分组: ${previousID}`);
+    }
+    await performTransactions([{
+        doOperations: [{
+            action: 'sortAttrViewGroup',
+            avID,
+            blockID,
+            id: groupID,
+            previousID
+        }]
+    }]);
+    return {
+        avID,
+        blockID,
+        groupID,
+        previousID
+    };
+}
+
+async function foldAttributeViewGroup(avID, groupID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(groupID, 'groupID');
+    const { blockID } = await resolveAttributeViewGroupContext(avID, groupID, options);
+    const folded = options.folded !== false;
+    await performTransactions([{
+        doOperations: [{
+            action: 'foldAttrViewGroup',
+            avID,
+            blockID,
+            id: groupID,
+            data: folded
+        }]
+    }]);
+    return { avID, blockID, groupID, folded };
+}
+
+async function addAttributeViewView(avID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const blockID = String(options.blockID || '').trim() || await resolvePrimaryAttributeViewBlockID(avID);
+    const viewID = String(options.viewID || createSyntheticNodeId('view')).trim();
+    const layout = String(options.layout || '').trim();
+    const operation = {
+        action: 'addAttrViewView',
+        avID,
+        id: viewID,
+        blockID
+    };
+    if (layout) {
+        operation.layout = layout;
+    }
+    await performTransactions([{ doOperations: [operation] }]);
+    return {
+        avID,
+        blockID,
+        viewID,
+        layout: layout || 'table'
+    };
+}
+
+async function removeAttributeViewView(avID, viewID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(viewID, 'viewID');
+    const blockID = String(options.blockID || '').trim() || await resolvePrimaryAttributeViewBlockID(avID);
+    await callAttributeViewApi('setDatabaseBlockView', {
+        id: blockID,
+        avID,
+        viewID
+    });
+    await performTransactions([{
+        doOperations: [{
+            action: 'removeAttrViewView',
+            avID,
+            id: viewID,
+            blockID
+        }]
+    }]);
+    return { avID, blockID, viewID };
+}
+
+async function renameAttributeViewView(avID, viewID, name) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(viewID, 'viewID');
+    assertNonEmptyString(name, 'name');
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewViewName',
+            avID,
+            id: viewID,
+            data: name
+        }]
+    }]);
+    return { avID, viewID, name };
+}
+
+async function setAttributeViewViewIcon(avID, viewID, icon) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(viewID, 'viewID');
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewViewIcon',
+            avID,
+            id: viewID,
+            data: String(icon || '')
+        }]
+    }]);
+    return { avID, viewID, icon: String(icon || '') };
+}
+
+async function setAttributeViewViewDesc(avID, viewID, desc) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(viewID, 'viewID');
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewViewDesc',
+            avID,
+            id: viewID,
+            data: String(desc || '')
+        }]
+    }]);
+    return { avID, viewID, desc: String(desc || '') };
+}
+
+async function duplicateAttributeViewView(avID, sourceViewID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(sourceViewID, 'sourceViewID');
+    const blockID = String(options.blockID || '').trim() || await resolvePrimaryAttributeViewBlockID(avID);
+    const viewID = String(options.viewID || createSyntheticNodeId('view')).trim();
+    await performTransactions([{
+        doOperations: [{
+            action: 'duplicateAttrViewView',
+            avID,
+            previousID: sourceViewID,
+            id: viewID,
+            blockID
+        }]
+    }]);
+    return { avID, blockID, sourceViewID, viewID };
+}
+
+async function sortAttributeViewView(avID, viewID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(viewID, 'viewID');
+    const operation = {
+        action: 'sortAttrViewView',
+        avID,
+        id: viewID,
+        previousID: String(options.previousID || '')
+    };
+    if (options.unRefresh) {
+        operation.data = 'unRefresh';
+    }
+    await performTransactions([{ doOperations: [operation] }]);
+    return operation;
+}
+
+async function setAttributeViewPageSize(avID, pageSize, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const size = Number(pageSize);
+    if (!Number.isFinite(size) || size < 1) {
+        throw new Error(`无效 pageSize: ${pageSize}`);
+    }
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewPageSize',
+            avID,
+            blockID,
+            data: size
+        }]
+    }]);
+    return { avID, blockID, pageSize: size };
+}
+
+async function hideAttributeViewName(avID, hidden, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const value = parseBooleanLike(hidden, 'hidden');
+    await performTransactions([{
+        doOperations: [{
+            action: 'hideAttrViewName',
+            avID,
+            blockID,
+            viewID: String(options.viewID || ''),
+            data: value
+        }]
+    }]);
+    return { avID, blockID, hidden: value };
+}
+
+async function setAttributeViewShowIcon(avID, show, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const value = parseBooleanLike(show, 'showIcon');
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewShowIcon',
+            avID,
+            blockID,
+            viewID: String(options.viewID || ''),
+            data: value
+        }]
+    }]);
+    return { avID, blockID, show: value };
+}
+
+async function setAttributeViewWrapField(avID, wrap, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const value = parseBooleanLike(wrap, 'wrapField');
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewWrapField',
+            avID,
+            blockID,
+            viewID: String(options.viewID || ''),
+            data: value
+        }]
+    }]);
+    return { avID, blockID, wrap: value };
+}
+
+async function setAttributeViewFitImage(avID, enabled, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const value = parseBooleanLike(enabled, 'fitImage');
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewFitImage',
+            avID,
+            blockID,
+            viewID: String(options.viewID || ''),
+            data: value
+        }]
+    }]);
+    return { avID, blockID, fitImage: value };
+}
+
+async function setAttributeViewDisplayFieldName(avID, enabled, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const value = parseBooleanLike(enabled, 'displayFieldName');
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewDisplayFieldName',
+            avID,
+            blockID,
+            data: value
+        }]
+    }]);
+    return { avID, blockID, displayFieldName: value };
+}
+
+async function setAttributeViewFillColBackgroundColor(avID, enabled, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const value = parseBooleanLike(enabled, 'fillColBackgroundColor');
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewFillColBackgroundColor',
+            avID,
+            blockID,
+            viewID: String(options.viewID || ''),
+            data: value
+        }]
+    }]);
+    return { avID, blockID, fillColBackgroundColor: value };
+}
+
+async function setAttributeViewCardSize(avID, cardSize, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const value = normalizeCardSize(cardSize);
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewCardSize',
+            avID,
+            blockID,
+            viewID: String(options.viewID || ''),
+            data: value
+        }]
+    }]);
+    return { avID, blockID, cardSize: value };
+}
+
+async function setAttributeViewCardAspectRatio(avID, ratio, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const value = normalizeCardAspectRatio(ratio);
+    await performTransactions([{
+        doOperations: [{
+            action: 'setAttrViewCardAspectRatio',
+            avID,
+            blockID,
+            viewID: String(options.viewID || ''),
+            data: value
+        }]
+    }]);
+    return { avID, blockID, cardAspectRatio: value };
+}
+
+async function setAttributeViewCoverFrom(avID, coverFrom, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const mode = normalizeCoverFrom(coverFrom);
+    const operations = [{
+        action: 'setAttrViewCoverFrom',
+        avID,
+        blockID,
+        data: mode
+    }];
+    if (mode === 2) {
+        assertNonEmptyString(String(options.assetKeyID || ''), 'assetKeyID');
+        operations.push({
+            action: 'setAttrViewCoverFromAssetKeyID',
+            avID,
+            blockID,
+            keyID: String(options.assetKeyID || '').trim()
+        });
+    }
+    await performTransactions([{ doOperations: operations }]);
+    return {
+        avID,
+        blockID,
+        coverFrom: mode,
+        assetKeyID: String(options.assetKeyID || '').trim()
+    };
+}
+
+async function sortAttributeViewRow(avID, itemID, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    assertNonEmptyString(itemID, 'itemID');
+    const { blockID } = await resolveAttributeViewBlockContext(avID, options);
+    const operation = {
+        action: 'sortAttrViewRow',
+        avID,
+        blockID,
+        id: itemID,
+        previousID: String(options.previousID || ''),
+        groupID: String(options.groupID || ''),
+        targetGroupID: String(options.targetGroupID || '')
+    };
+    await performTransactions([{ doOperations: [operation] }]);
+    return operation;
+}
+
+async function addAttributeViewBlockRows(avID, blockIds, options = {}) {
+    assertNonEmptyString(avID, 'avID');
+    if (!Array.isArray(blockIds) || blockIds.length === 0) {
+        throw new Error('blockIds 不能为空');
+    }
+
+    const uniqueBlockIds = [...new Set(blockIds.map((item) => String(item || '').trim()).filter(Boolean))];
+    if (uniqueBlockIds.length === 0) {
+        throw new Error('blockIds 不能为空');
+    }
+
+    const safeIds = uniqueBlockIds.map((id) => `'${escapeSqlValue(id)}'`).join(', ');
+    const rows = await executeSiyuanQuery(`
+        SELECT id
+        FROM blocks
+        WHERE id IN (${safeIds})
+    `);
+    const existingIds = new Set(rows.map((row) => row.id));
+    for (const blockId of uniqueBlockIds) {
+        if (!existingIds.has(blockId)) {
+            throw new Error(`目标块不存在: ${blockId}`);
+        }
+    }
+
+    let blockID = String(options.blockID || '').trim();
+    if (!blockID) {
+        blockID = await resolvePrimaryAttributeViewBlockID(avID);
+    }
+
+    const srcs = uniqueBlockIds.map((blockId) => ({
+        itemID: createSyntheticNodeId('row'),
+        id: blockId,
+        isDetached: false
+    }));
+    return await addAttributeViewRows({
+        avID,
+        blockID,
+        viewID: options.viewID || '',
+        groupID: options.groupID || '',
+        previousID: options.previousID || '',
+        ignoreDefaultFill: !!options.ignoreDefaultFill,
+        srcs
+    });
+}
+
+async function uploadAssets(filePaths, options = {}) {
+    ensureWriteEnabled();
+    if (!Array.isArray(filePaths) || filePaths.length === 0) {
+        throw new Error('filePaths 不能为空');
+    }
+
+    const formData = new FormData();
+    if (options.assetsDirPath) {
+        formData.append('assetsDirPath', String(options.assetsDirPath));
+    }
+    if (options.docBlockId) {
+        formData.append('id', String(options.docBlockId));
+    }
+    if (options.skipIfDuplicated) {
+        formData.append('skipIfDuplicated', 'true');
+    }
+
+    for (const rawPath of filePaths) {
+        const resolvedPath = path.resolve(String(rawPath || ''));
+        if (!fs.existsSync(resolvedPath)) {
+            throw new Error(`文件不存在: ${resolvedPath}`);
+        }
+
+        const stat = fs.statSync(resolvedPath);
+        if (!stat.isFile()) {
+            throw new Error(`仅支持上传文件: ${resolvedPath}`);
+        }
+
+        const buffer = fs.readFileSync(resolvedPath);
+        const fileName = path.basename(resolvedPath);
+        formData.append('file[]', new Blob([buffer]), fileName);
+    }
+
+    const data = await requestSiyuanMultipartApi(API_ENDPOINTS.ASSET_UPLOAD, formData, { requireAuth: true });
+    return {
+        errFiles: Array.isArray(data?.errFiles) ? data.errFiles : [],
+        succMap: data?.succMap && typeof data.succMap === 'object' ? data.succMap : {}
+    };
+}
+
+function buildAssetInsertSnippet(assetPath, mode = 'auto') {
+    const safePath = String(assetPath || '').trim();
+    if (!safePath) {
+        return '';
+    }
+
+    const fileName = path.basename(safePath);
+    const ext = path.extname(fileName).toLowerCase();
+    if (mode === 'pdf') {
+        return `<iframe sandbox="allow-forms allow-presentation allow-same-origin allow-scripts allow-modals allow-popups" src="${safePath}" border="0" frameborder="no" framespacing="0" allowfullscreen="true"></iframe>`;
+    }
+    if (mode === 'iframe') {
+        return `<iframe sandbox="allow-forms allow-presentation allow-same-origin allow-scripts allow-modals allow-popups" src="${safePath}" border="0" frameborder="no" framespacing="0" allowfullscreen="true"></iframe>`;
+    }
+    if (mode === 'link') {
+        return `[${fileName}](${safePath})`;
+    }
+
+    if (/\.(png|jpg|jpeg|gif|webp|bmp|svg)$/i.test(ext)) {
+        return `![](${safePath})`;
+    }
+    if (/\.(mp4|webm|mov|m4v|ogv)$/i.test(ext)) {
+        return `<video controls="controls" src="${safePath}"></video>`;
+    }
+    if (/\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(ext)) {
+        return `<audio controls="controls" src="${safePath}"></audio>`;
+    }
+    if (/\.(pdf)$/i.test(ext) && mode === 'auto') {
+        return `[${fileName}](${safePath})`;
+    }
+    return `[${fileName}](${safePath})`;
+}
+
+async function uploadAndInsertAssets(filePaths, anchors = {}, options = {}) {
+    const anchorId = anchors.parentID || anchors.previousID || anchors.nextID || '';
+    if (!anchorId) {
+        throw new Error('uploadAndInsertAssets 需要锚点(parentID/previousID/nextID)');
+    }
+
+    const upload = await uploadAssets(filePaths, {
+        assetsDirPath: options.assetsDirPath || '',
+        docBlockId: anchorId,
+        skipIfDuplicated: !!options.skipIfDuplicated
+    });
+
+    const insertedAssetPaths = Object.values(upload.succMap || {}).map((value) => String(value || '').trim()).filter(Boolean);
+    if (insertedAssetPaths.length === 0) {
+        throw new Error('上传完成，但没有可插入的资源路径');
+    }
+
+    const markdown = insertedAssetPaths
+        .map((assetPath) => buildAssetInsertSnippet(assetPath, options.mode || 'auto'))
+        .filter(Boolean)
+        .join('\n\n');
+
+    const insertResult = anchors.parentID && !anchors.previousID && !anchors.nextID
+        ? await appendMarkdownToBlock(anchors.parentID, markdown)
+        : await insertBlock(markdown, anchors);
+    return {
+        upload,
+        markdown,
+        insert: insertResult
+    };
+}
 
 /**
  * 检查思源笔记连接状态
@@ -2472,9 +4721,64 @@ const CLI_HANDLERS = createCliHandlers({
     checkSkillVersion,
     createDocWithMd,
     renameDoc,
+    discoverAttributeViewsInDocument,
     getPathByID,
     updateBlock,
-    deleteBlock
+    deleteBlock,
+    callAttributeViewApi,
+    addAttributeViewRows,
+    addAttributeViewRelationKey,
+    addAttributeViewRollupKey,
+    setAttributeViewTextCell,
+    setAttributeViewNumberCell,
+    setAttributeViewDateCell,
+    setAttributeViewSelectCell,
+    setAttributeViewCheckboxCell,
+    setAttributeViewMultiSelectCell,
+    setAttributeViewUrlCell,
+    setAttributeViewEmailCell,
+    setAttributeViewPhoneCell,
+    setAttributeViewTemplateCell,
+    setAttributeViewAssetCell,
+    setAttributeViewBlockCell,
+    addAttributeViewDocRows,
+    setAttributeViewRelationCell,
+    clearAttributeViewRelationCell,
+    addAttributeViewOption,
+    updateAttributeViewOption,
+    removeAttributeViewOption,
+    updateAttributeViewRelationKey,
+    updateAttributeViewRollupKey,
+    getAttributeViewFilterSortState,
+    setAttributeViewFilters,
+    setAttributeViewSorts,
+    setAttributeViewGroup,
+    removeAttributeViewGroup,
+    hideAttributeViewGroup,
+    hideAllAttributeViewGroups,
+    sortAttributeViewGroup,
+    foldAttributeViewGroup,
+    addAttributeViewView,
+    removeAttributeViewView,
+    renameAttributeViewView,
+    setAttributeViewViewIcon,
+    setAttributeViewViewDesc,
+    duplicateAttributeViewView,
+    sortAttributeViewView,
+    setAttributeViewPageSize,
+    hideAttributeViewName,
+    setAttributeViewShowIcon,
+    setAttributeViewWrapField,
+    setAttributeViewFitImage,
+    setAttributeViewDisplayFieldName,
+    setAttributeViewFillColBackgroundColor,
+    setAttributeViewCardSize,
+    setAttributeViewCardAspectRatio,
+    setAttributeViewCoverFrom,
+    sortAttributeViewRow,
+    addAttributeViewBlockRows,
+    uploadAssets,
+    uploadAndInsertAssets
 });
 
 /**
@@ -2518,8 +4822,10 @@ module.exports = {
     listNotebooks,
     createDocWithMd,
     renameDoc,
+    discoverAttributeViewsInDocument,
     getChildBlocks,
     updateBlock,
+    getHPathByID,
     getPathByID,
     getIDsByHPath,
     listDocsByPath,
@@ -2551,6 +4857,60 @@ module.exports = {
     getRandomHeading,
     getRecentBlocks,
     getUnreferencedDocuments,
+    callAttributeViewApi,
+    addAttributeViewRows,
+    addAttributeViewRelationKey,
+    addAttributeViewRollupKey,
+    setAttributeViewTextCell,
+    setAttributeViewNumberCell,
+    setAttributeViewDateCell,
+    setAttributeViewSelectCell,
+    setAttributeViewCheckboxCell,
+    setAttributeViewMultiSelectCell,
+    setAttributeViewUrlCell,
+    setAttributeViewEmailCell,
+    setAttributeViewPhoneCell,
+    setAttributeViewTemplateCell,
+    setAttributeViewAssetCell,
+    setAttributeViewBlockCell,
+    addAttributeViewDocRows,
+    setAttributeViewRelationCell,
+    clearAttributeViewRelationCell,
+    addAttributeViewOption,
+    updateAttributeViewOption,
+    removeAttributeViewOption,
+    updateAttributeViewRelationKey,
+    updateAttributeViewRollupKey,
+    getAttributeViewFilterSortState,
+    setAttributeViewFilters,
+    setAttributeViewSorts,
+    setAttributeViewGroup,
+    removeAttributeViewGroup,
+    hideAttributeViewGroup,
+    hideAllAttributeViewGroups,
+    sortAttributeViewGroup,
+    foldAttributeViewGroup,
+    addAttributeViewView,
+    removeAttributeViewView,
+    renameAttributeViewView,
+    setAttributeViewViewIcon,
+    setAttributeViewViewDesc,
+    duplicateAttributeViewView,
+    sortAttributeViewView,
+    setAttributeViewPageSize,
+    hideAttributeViewName,
+    setAttributeViewShowIcon,
+    setAttributeViewWrapField,
+    setAttributeViewFitImage,
+    setAttributeViewDisplayFieldName,
+    setAttributeViewFillColBackgroundColor,
+    setAttributeViewCardSize,
+    setAttributeViewCardAspectRatio,
+    setAttributeViewCoverFrom,
+    sortAttributeViewRow,
+    addAttributeViewBlockRows,
+    uploadAssets,
+    uploadAndInsertAssets,
     openDocument,
     renderPatchableMarkdown,
     parsePatchableMarkdown,
@@ -2784,10 +5144,9 @@ async function openDocumentPatchableView(docId, options = {}) {
     const limitBlocks = normalizeInt(options.limitBlocks, OPEN_DOC_BLOCK_PAGE_SIZE, 5, 10000);
     const cursor = typeof options.cursor === 'string' ? options.cursor.trim() : '';
 
-    const [meta, kramdown, docBlocks] = await Promise.all([
+    const [meta, allBlocks] = await Promise.all([
         getDocumentMeta(docId),
-        getBlockKramdown(docId),
-        getDocumentBlocks(docId)
+        getDocumentBlocksInTreeOrder(docId)
     ]);
     await markDocumentRead(docId, 'openDocumentPatchableView', meta?.updated || '');
 
@@ -2795,14 +5154,6 @@ async function openDocumentPatchableView(docId, options = {}) {
         meta.hpath = await getHPathByID(docId);
     }
 
-    const parentIdMap = {};
-    for (const block of docBlocks) {
-        if (block && block.id) {
-            parentIdMap[block.id] = block.parent_id || '';
-        }
-    }
-
-    const allBlocks = parseBlocksFromKramdown(kramdown, parentIdMap);
     const totalBlocks = allBlocks.length;
 
     // 确定起始位置
@@ -3173,6 +5524,21 @@ async function buildApplyPatchPlan(docId, patchableMarkdown) {
  * @returns {string} 新块ID
  */
 function extractInsertedBlockId(apiResult) {
+    if (apiResult && typeof apiResult === 'object') {
+        if (typeof apiResult.insertedBlockId === 'string' && isLikelyBlockId(apiResult.insertedBlockId)) {
+            return apiResult.insertedBlockId;
+        }
+        if (Array.isArray(apiResult.insertedBlockIds)) {
+            const firstId = apiResult.insertedBlockIds.find((id) => typeof id === 'string' && isLikelyBlockId(id));
+            if (firstId) {
+                return firstId;
+            }
+        }
+        if ('rawData' in apiResult) {
+            return extractInsertedBlockId(apiResult.rawData);
+        }
+    }
+
     const queue = [apiResult];
     while (queue.length > 0) {
         const current = queue.shift();
@@ -3359,6 +5725,9 @@ async function applyPatchToDocument(docId, patchableMarkdown) {
     const plan = await buildApplyPatchPlan(docId, patchableMarkdown);
     const execution = await executeApplyPatchPlan(plan);
     return {
+        success: true,
+        state: 'applied',
+        operation: 'applyPatchToDocument',
         plan,
         execution
     };

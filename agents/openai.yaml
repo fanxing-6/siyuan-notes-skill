@@ -1,0 +1,7 @@
+interface:
+  display_name: "SiYuan Notes Skill"
+  short_description: "Search, read, edit, and organize SiYuan notes safely."
+  default_prompt: "Use $siyuan-notes-skill to search, read, or edit my SiYuan notes safely."
+
+policy:
+  allow_implicit_invocation: true

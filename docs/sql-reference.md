@@ -37,11 +37,17 @@ SiYuan uses SQLite. Default result limit is 64 rows unless you specify `LIMIT`.
 | `l` | List |
 | `i` | List item |
 | `b` | Blockquote |
+| `query_embed` | Embed block |
+| `av` | Attribute view (database) |
+| `iframe` | IFrame |
+| `widget` | Widget |
+| `video` | Video |
+| `audio` | Audio |
+| `callout` | Callout |
 | `s` | Super block |
 | `c` | Code block |
 | `m` | Math block |
 | `t` | Table |
-| `av` | Attribute view (database) |
 
 ### Block subtypes (`subtype`)
 

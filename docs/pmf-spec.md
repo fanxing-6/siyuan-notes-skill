@@ -6,14 +6,14 @@ PMF 是保留思源块 ID 的 Markdown 格式，用于精确文档编辑。
 
 ### 文档标记（第一行，必需）
 
-```
-%% @siyuan:doc id=20260119203720-12nweia hpath="/数据构建/数据分析" view=patchable pmf=v1 %%
+```html
+<!-- @siyuan:doc id=20260119203720-12nweia hpath="/数据构建/数据分析" view=patchable pmf=v1 -->
 ```
 
 ### 块标记（每个块一个）
 
-```
-%% @siyuan:block id=20260121165142-nzdyfe0 type=t parent=20260119203720-12nweia %%
+```html
+<!-- @siyuan:block id=20260121165142-nzdyfe0 type=t parent=20260119203720-12nweia -->
 | 列1 | 列2 |
 |------|------|
 | 数据 | 数据 |
@@ -22,7 +22,7 @@ PMF 是保留思源块 ID 的 Markdown 格式，用于精确文档编辑。
 | 属性 | 必需 | 说明 |
 |------|------|------|
 | `id` | 是 | 块 ID，格式 `YYYYMMDDHHmmss-xxxxxxx` |
-| `type` | 是 | 块类型：`h`标题 `p`段落 `l`列表 `c`代码 `t`表格 `m`公式 `b`引述 `s`超级块 |
+| `type` | 是 | 块类型：`h`标题 `p`段落 `l`列表 `c`代码 `t`表格 `m`公式 `b`引述 `callout`提示框 `s`超级块 |
 | `subType` | 否 | `h1`-`h6`（标题）、`u`/`t`/`o`（列表） |
 | `parent` | 否 | 父块 ID（省略则父块为文档根） |
 
@@ -34,13 +34,13 @@ PMF 是保留思源块 ID 的 Markdown 格式，用于精确文档编辑。
 
 **只改 markdown 内容，不增删块。** 这是最可靠的用法。
 
-```
-%% @siyuan:doc id=20260119203720-12nweia hpath="/文档" view=patchable pmf=v1 %%
+```html
+<!-- @siyuan:doc id=20260119203720-12nweia hpath="/文档" view=patchable pmf=v1 -->
 
-%% @siyuan:block id=20260121165142-nzdyfe0 type=p parent=20260119203720-12nweia %%
+<!-- @siyuan:block id=20260121165142-nzdyfe0 type=p parent=20260119203720-12nweia -->
 这是修改后的段落内容
 
-%% @siyuan:block id=20260121165142-abc1234 type=h subType=h2 parent=20260119203720-12nweia %%
+<!-- @siyuan:block id=20260121165142-abc1234 type=h subType=h2 parent=20260119203720-12nweia -->
 ## 修改后的标题
 ```
 

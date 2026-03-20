@@ -11,6 +11,9 @@ metadata:
 
 ## 开始前（可选）：版本检查
 
+数据库相关任务优先阅读 `docs/database-operations.md`。  
+这份文档已经覆盖高层数据库命令、读后写围栏、relation / rollup、filters / sorts / groups / views，以及 gallery / kanban 细项配置。
+
 如需确认是否为最新版本，请运行：
 
 ```bash
@@ -99,11 +102,11 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 | `search-in-doc` | `{docID} {关键词} [数量]` | 在指定文档内搜索匹配的块 |
 | `notebooks` | | 列出笔记本 |
 | `docs` | `[notebookID] [limit]` | 列出文档（含文档 ID，默认 200） |
-| `headings` | `{docID} [level]` | 文档标题（level 格式：`h1`/`h2`/…/`h6`，不是数字） |
-| `blocks` | `{docID} [type]` | 文档子块（含块 ID，可用于写入） |
-| `doc-children` | `{notebookID} [path]` | 子文档列表 |
-| `doc-tree` | `{notebookID} [path] [depth]` | 子文档树（默认深度 4） |
-| `doc-tree-id` | `{docID} [depth]` | 以文档 ID 展示子文档树 |
+| `headings` | `{docID} [level]` | 文档标题（按真实树顺序返回；level 格式：`h1`/`h2`/…/`h6`，不是数字） |
+| `blocks` | `{docID} [type]` | 文档子块（按真实树顺序返回，含块 ID，可用于写入） |
+| `doc-children` | `{notebookID} [path]` | 子文档列表（显式请求完整列表） |
+| `doc-tree` | `{notebookID} [path] [depth]` | 子文档树（默认深度 4，显式请求完整列表） |
+| `doc-tree-id` | `{docID} [depth]` | 以文档 ID 展示子文档树（显式请求完整列表） |
 | `tag` | `{tagName}` | 按标签搜索 |
 | `backlinks` | `{blockID}` | 反向链接 |
 | `tasks` | `[status] [days]` | 任务（`[ ]`/`[x]`/`[-]`，默认 7 天） |
@@ -130,6 +133,16 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 | `apply-patch` | `{docID}` （PMF 通过 stdin 传入） | **仅限**批量修改/删除/重排已有块（拒绝 partial PMF） |
 | `move-docs-by-id` | `{targetID} {sourceIDs}` | 移动文档（需先 open-doc 目标文档**和**所有来源文档） |
 | `subdoc-analyze-move` | `{targetID} {sourceIDs} [depth]` | 分析移动计划（只读） |
+| `av-get` | `{avID}` | 获取数据库定义 |
+| `av-render` | `{avID} ...` | 渲染数据库视图 |
+| `av-keys` / `av-keys-by-av` | `{id\|avID}` | 获取数据库字段列表 |
+| `av-primary-keys` | `{avID}` | 获取数据库主键/行列表 |
+| `av-add-key` / `av-remove-key` / `av-sort-key` | 数据库字段级操作 | 需要先读取数据库所在文档 |
+| `av-add-rows` / `av-remove-rows` / `av-set-cell` | 数据库行/单元格级操作 | 需要先读取数据库所在文档 |
+| `av-change-layout` / `av-set-view` / `av-duplicate` | 数据库视图级操作 | 需要先读取数据库所在文档 |
+| `av-call` | `{操作名}` + stdin JSON | 通用数据库接口入口 |
+| `asset-upload` | `{文件路径...}` | 上传资源到思源 assets（不修改文档内容） |
+| `asset-insert` | `--before/--after/--parent` + `{文件路径...}` | 上传资源并插入到文档，需先读取目标文档 |
 
 ## Common Patterns
 
@@ -320,7 +333,7 @@ SIYUAN_ENABLE_WRITE=true node /tmp/batch_edit.js
 - `open-doc readable` 返回干净 Markdown → 适合阅读和总结（超长文档自动截断到 ~15K 字符，附带标题大纲）
 - `open-doc patchable` 返回 PMF 格式 → 仅用于编辑后 apply-patch（超长文档自动分页，分页 PMF 含 `partial=true`，**不可用于 apply-patch**）
 - `open-section` 返回单章节内容 → 适合精确阅读/编辑特定章节
-- 写入命令返回 JSON（通常很冗长） → 只提取关键信息（如新文档 ID、成功/失败）展示给用户，不要原样输出全部 JSON
+- 写入命令返回结构化 JSON 回执（含 `success/state/operation`） → 只提取关键信息（如新文档 ID、成功/失败、影响文档）展示给用户，不要原样输出全部 JSON
 - 公式渲染：行内公式用 `$...$`，独立公式块用 `$$...$$`（思源会渲染为数学块）
 
 ## KaTeX Formula Rules (No Silent Rewrite)
@@ -379,17 +392,29 @@ SIYUAN_ENABLE_WRITE=true node /tmp/batch_edit.js
 | `m` | NodeMathBlock | 公式块 | 否 |
 | `t` | NodeTable | **表格**（整体为一个块，内部 head/body/row/cell 不是独立块） | 否 |
 | `b` | NodeBlockquote | 引述 | 是 |
+| `query_embed` | NodeBlockQueryEmbed | 嵌入块 | 否 |
+| `av` | NodeAttributeView | 属性视图（数据库） | 否 |
+| `iframe` | NodeIFrame | IFrame | 否 |
+| `widget` | NodeWidget | 挂件 | 否 |
+| `video` | NodeVideo | 视频 | 否 |
+| `audio` | NodeAudio | 音频 | 否 |
+| `callout` | NodeCallout | 提示框（如 `> [!TIP]`） | 是 |
 | `s` | NodeSuperBlock | 超级块 | 是 |
 | `tb` | NodeThematicBreak | **分割线**（`---`），⚠️ 不是表格体 | 否 |
 | `html` | NodeHTMLBlock | HTML 块 | 否 |
-| `av` | NodeAttributeView | 属性视图（数据库） | 否 |
 
 **表格结构说明**：思源中表格（`t`）是原子块，内部的 TableHead/TableBody/TableRow/TableCell 是 AST 节点，**没有独立 block ID**。编辑表格只能整体替换，不能操作单个单元格。
 
 ## Notes
 
+- 数据库相关操作优先阅读 `docs/database-operations.md`
 - cwd 必须是 skill 目录（`index.js` 所在目录）
 - `.env` 自动从 `index.js` 目录加载
+- 配置键：`SIYUAN_HOST`、`SIYUAN_PORT`、`SIYUAN_USE_HTTPS`、`SIYUAN_API_TOKEN`
+- 若走反向代理子路径，可设置 `SIYUAN_BASE_PATH`
+- 数据库写命令（`av-*` 的写操作）复用读后写围栏：必须先 `open-doc` 读取数据库块所在文档
+- 若同一属性视图以多个数据库块/镜像形式出现在多个文档中，写操作会校验这些宿主数据库块的读标记
+- `asset-upload` 只修改 assets，不要求先读取文档；`asset-insert` 会修改文档内容，因此要求先读目标文档
 - 路径含空格需加引号
 - Markdown 内容含换行时必须用 `$'...\n...'` 语法（Bash ANSI-C quoting），普通双引号 `"...\n..."` 中的 `\n` 是字面文本不是换行
 - 连接检查：`node index.js check`
