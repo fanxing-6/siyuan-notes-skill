@@ -548,13 +548,26 @@ async function refreshDocumentVersion(docId) {
 function checkEnvironmentConfig() {
     if (!SIYUAN_API_TOKEN || SIYUAN_API_TOKEN.trim() === '') {
         console.error(`
-❌ 错误: 未配置思源笔记API Token
+❌ 错误: 未配置思源笔记 API token
 
 请按以下步骤配置:
 
 1. 打开思源笔记
 2. 进入 设置 → 关于
-3. 复制 API Token
+3. 在该页面中找到并原样复制这两块内容:
+
+【在浏览器上使用】
+请把“在浏览器上使用”下面的整段原文完整复制出来。
+如果里面有多条地址，请全部复制。
+
+【API token】
+请把“API token”下面的整段原文完整复制出来。
+界面里通常会显示类似:
+
+API token
+调用 API 时需要通过该 token 进行鉴权
+HTTP 请求标头 Authorization: token <YOUR_API_TOKEN>
+
 4. 创建 .env 文件并填入配置:
 
 cp .env.example .env
@@ -566,7 +579,7 @@ SIYUAN_HOST=你的服务器地址
 SIYUAN_PORT=端口号 (HTTPS且无特殊端口可留空)
 SIYUAN_USE_HTTPS=true (如果使用HTTPS)
 SIYUAN_BASE_PATH=/可选子路径
-SIYUAN_API_TOKEN=你的实际API_TOKEN
+SIYUAN_API_TOKEN=你的实际_API_token
 
 # 可选：HTTP Basic Auth (如果启用了Basic Auth)
 SIYUAN_BASIC_AUTH_USER=用户名
@@ -578,13 +591,13 @@ SIYUAN_ALLOW_TOKEN_IN_QUERY=true
 SIYUAN_HOST=localhost
 SIYUAN_PORT=6806
 SIYUAN_USE_HTTPS=false
-SIYUAN_API_TOKEN=your_api_token_here
+SIYUAN_API_TOKEN=<YOUR_API_TOKEN>
 
 # 示例配置 (远程服务器+HTTPS+Basic Auth)
 SIYUAN_HOST=note.example.com
 SIYUAN_PORT=
 SIYUAN_USE_HTTPS=true
-SIYUAN_API_TOKEN=your_api_token
+SIYUAN_API_TOKEN=<YOUR_API_TOKEN>
 SIYUAN_BASIC_AUTH_USER=username
 SIYUAN_BASIC_AUTH_PASS=password
 # SIYUAN_ALLOW_TOKEN_IN_QUERY=true
