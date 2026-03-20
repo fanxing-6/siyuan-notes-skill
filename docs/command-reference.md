@@ -523,7 +523,7 @@ node index.js insert-block --parent {块ID}
 | --parent 块ID | 三选一 | 作为目标父块的末尾子块插入（映射到 parentID） |
 | stdin | 是 | 要插入的 Markdown 内容（仅支持 stdin） |
 
-**返回**：JSON
+**返回**：JSON，含统一写入回执和 `insertedBlockId`
 
 **常见用法：**
 ```bash
@@ -675,7 +675,7 @@ node index.js move-docs-by-id {目标ID} {来源ID列表}
 
 **前置条件**：必须先 `open-doc` 目标文档**和**每个来源文档（写入围栏要求所有涉及的文档都已被读取）。
 
-**返回**：JSON，含移动计划或执行结果
+**返回**：JSON，含 `success/state/operation`、移动计划和执行结果
 
 ---
 
@@ -725,7 +725,7 @@ s.updateBlock('块ID', '新的 Markdown 内容').then(function(r) { console.log(
 "
 ```
 
-与 CLI 一致：当传入 Markdown 会解析为多块时，`updateBlock()` 会返回 `mode: "structured-update"` 并自动执行拆块写入。
+与 CLI 一致：`updateBlock()` 返回结构化回执；当传入 Markdown 会解析为多块时，额外包含 `mode: "structured-update"`。
 
 ### 在指定位置插入（JS API）
 
@@ -741,6 +741,8 @@ s.insertBlock('插入内容', { nextID: '目标块ID' }).then(function(r) { cons
 ```
 
 锚点参数三选一：`{ nextID }`（前插）/ `{ previousID }`（后插）/ `{ parentID }`（父块下插入）。
+
+`insertBlock()` 返回结构化回执，包含 `insertedBlockId`。
 
 ### 执行 SQL 查询
 
