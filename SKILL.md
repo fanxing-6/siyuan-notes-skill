@@ -11,46 +11,16 @@ metadata:
 
 ## 开始前（可选）：版本检查
 
-数据库相关任务优先阅读 `docs/database-operations.md`。  
-这份文档已经覆盖高层数据库命令、读后写围栏、relation / rollup、filters / sorts / groups / views，以及 gallery / kanban 细项配置。
+数据库相关任务优先阅读 [docs/database-operations.md](docs/database-operations.md)。
 
 ## 首次配置引导
 
-如果用户尚未提供思源内核地址和鉴权信息，先引导用户在思源笔记中打开：
+如果用户尚未提供思源内核地址和鉴权信息，引导用户打开 `设置 → 关于`，原样复制以下两段内容（不要手动改写）：
 
-`设置 → 关于`
+1. **`在浏览器上使用`** — 复制下方的全部地址
+2. **`API token`** — 复制 token 值（文档中统一写 `<YOUR_API_TOKEN>`，不要暴露真实 token）
 
-然后让用户**原样复制**下面两块内容，不要手动改写：
-
-### 1. `在浏览器上使用`
-
-让用户找到界面中的：
-
-`在浏览器上使用`
-
-把这下面的整段原文完整复制出来。  
-如果里面有多条地址，要求用户全部复制。
-
-### 2. `API token`
-
-让用户找到界面中的：
-
-`API token`
-
-并把这下面的整段原文完整复制出来。界面里通常会出现类似：
-
-```text
-API token
-调用 API 时需要通过该 token 进行鉴权
-HTTP 请求标头 Authorization: token <YOUR_API_TOKEN>
-```
-
-注意：
-
-- 文档和提示里都使用界面原词 `API token`，不要改写成 `Token 密钥`
-- 不要让用户去解释含义，只需要复制粘贴
-- 不要在正式文档、公开仓库或截图里写真实 token，统一写成 `<YOUR_API_TOKEN>`
-- 如果用户只会操作界面，不会理解技术细节，就只让他完成“打开 设置 → 关于 → 复制两段内容”
+注意：始终使用界面原词 `API token`，不要改写为 `Token 密钥`
 
 ## 工作目录门禁
 
@@ -166,60 +136,15 @@ SIYUAN_ENABLE_WRITE=true node index.js append-block "docID" "内容"
 
 ## Core Commands Quick Reference
 
-所有命令：`node index.js {command} [args]`
+所有命令：`node index.js {command} [args]`。完整参数、默认值、返回格式见 [docs/command-reference.md](docs/command-reference.md)。
 
-### 读取
+**读取**: `search` `search-md` `open-doc` `open-section` `search-in-doc` `notebooks` `docs` `headings` `blocks` `doc-children` `doc-tree` `doc-tree-id` `tag` `backlinks` `tasks` `daily` `attr` `bookmarks` `random` `recent` `unreferenced` `check` `version`
 
-| Command | Signature | Description |
-|---------|-----------|-------------|
-| `search` | `{keyword} [limit] [type]` | 搜索笔记（type: p/h/l/c/d…） |
-| `search-md` | `{keyword} [limit] [type]` | 搜索并输出 Markdown 结果页 |
-| `open-doc` | `{docID} [readable\|patchable] [--full] [--cursor {块ID}] [--limit-chars {N}] [--limit-blocks {N}]` | 打开文档（默认 readable）。超长文档自动截断/分页，`--full` 跳过截断输出全量。**副作用：标记已读** |
-| `open-section` | `{标题块ID} [readable\|patchable]` | 读取标题下的章节内容。**副作用：标记文档已读** |
-| `search-in-doc` | `{docID} {关键词} [数量]` | 在指定文档内搜索匹配的块 |
-| `notebooks` | | 列出笔记本 |
-| `docs` | `[notebookID] [limit]` | 列出文档（含文档 ID，默认 200） |
-| `headings` | `{docID} [level]` | 文档标题（按真实树顺序返回；level 格式：`h1`/`h2`/…/`h6`，不是数字） |
-| `blocks` | `{docID} [type]` | 文档子块（按真实树顺序返回，含块 ID，可用于写入） |
-| `doc-children` | `{notebookID} [path]` | 子文档列表（显式请求完整列表） |
-| `doc-tree` | `{notebookID} [path] [depth]` | 子文档树（默认深度 4，显式请求完整列表） |
-| `doc-tree-id` | `{docID} [depth]` | 以文档 ID 展示子文档树（显式请求完整列表） |
-| `tag` | `{tagName}` | 按标签搜索 |
-| `backlinks` | `{blockID}` | 反向链接 |
-| `tasks` | `[status] [days]` | 任务（`[ ]`/`[x]`/`[-]`，默认 7 天） |
-| `daily` | `{start} {end}` | Daily Note（YYYYMMDD） |
-| `attr` | `{name} [value]` | 按属性查询（自定义属性加 `custom-` 前缀） |
-| `bookmarks` | `[name]` | 书签 |
-| `random` | `{docID}` | 随机标题 |
-| `recent` | `[days] [type]` | 最近修改（默认 7 天） |
-| `unreferenced` | `{notebookID}` | 未被引用的文档 |
-| `check` | | 连接检查 |
-| `version` | | 内核版本 |
+**写入** (需 `SIYUAN_ENABLE_WRITE=true`): `create-doc` `rename-doc` `update-block` `delete-block` `append-block` `insert-block` `replace-section` `apply-patch` `move-docs-by-id`
 
-### 写入
+**数据库**: `av-get` `av-render` `av-keys` `av-keys-by-av` `av-primary-keys` `av-add-key` `av-remove-key` `av-sort-key` `av-add-rows` `av-remove-rows` `av-set-cell` `av-change-layout` `av-set-view` `av-duplicate` `av-call`
 
-| Command | Signature | 适用场景 |
-|---------|-----------|---------|
-| `create-doc` | `{notebookID} {标题}` | 创建新文档（标题即文档名，初始内容仅支持 stdin） |
-| `rename-doc` | `{docID} {新标题}` | 重命名文档 |
-| `update-block` | `{块ID}` | 更新块内容（Markdown 仅支持 stdin；多块输入自动拆块安全写入） |
-| `delete-block` | `{块ID}` | 删除单个块 |
-| `append-block` | `{parentID}` | 添加新内容（parentID 可以是文档 ID 或标题块 ID；Markdown 仅支持 stdin） |
-| `insert-block` | `{--before 块ID\|--after 块ID\|--parent 块ID}` | 在指定锚点插入内容（前/后/父块下；Markdown 仅支持 stdin） |
-| `replace-section` | `{headingID}` 或 `{headingID} --clear` | 替换/清空章节（保留标题块本身；Markdown 仅支持 stdin） |
-| `apply-patch` | `{docID}` （PMF 通过 stdin 传入） | **仅限**批量修改/删除/重排已有块（拒绝 partial PMF） |
-| `move-docs-by-id` | `{targetID} {sourceIDs}` | 移动文档（需先 open-doc 目标文档**和**所有来源文档） |
-| `subdoc-analyze-move` | `{targetID} {sourceIDs} [depth]` | 分析移动计划（只读） |
-| `av-get` | `{avID}` | 获取数据库定义 |
-| `av-render` | `{avID} ...` | 渲染数据库视图 |
-| `av-keys` / `av-keys-by-av` | `{id\|avID}` | 获取数据库字段列表 |
-| `av-primary-keys` | `{avID}` | 获取数据库主键/行列表 |
-| `av-add-key` / `av-remove-key` / `av-sort-key` | 数据库字段级操作 | 需要先读取数据库所在文档 |
-| `av-add-rows` / `av-remove-rows` / `av-set-cell` | 数据库行/单元格级操作 | 需要先读取数据库所在文档 |
-| `av-change-layout` / `av-set-view` / `av-duplicate` | 数据库视图级操作 | 需要先读取数据库所在文档 |
-| `av-call` | `{操作名}` + stdin JSON | 通用数据库接口入口 |
-| `asset-upload` | `{文件路径...}` | 上传资源到思源 assets（不修改文档内容） |
-| `asset-insert` | `--before/--after/--parent` + `{文件路径...}` | 上传资源并插入到文档，需先读取目标文档 |
+**资源**: `asset-upload` `asset-insert`
 
 ## Common Patterns
 
@@ -417,32 +342,16 @@ SIYUAN_ENABLE_WRITE=true node /tmp/batch_edit.js
 
 **核心原则：写入内容必须与模型输出一致。禁止在写入前/写入中对公式做隐式重写。**
 
-### 必须遵守
+- 定界符只用 `$...$`（行内）和 `$$...$$`（独立），数学模式内禁止嵌套 `$`
+- 乘幂星号写 `e^*` 或 `e^{\ast}`（不要写 `e^\*`）；计数项写 `N_{web\_search}` 而非 `#web_search`
+- 写入后必须 `open-doc {docID} readable` 回读，检查 `KaTeX parse error`、`Undefined control sequence` 等高风险串
 
-- 数学定界符只用两种：行内 `$...$`，独立 `$$...$$`
-- 数学模式内禁止再次出现 `$`（例如 `$$ ... $x$ ... $$` 是错误）
-- 需要乘幂星号时写 `e^*` 或 `e^{\ast}`，不要写 `e^\*`
-- 计数项不要写 `#web_search`、`#tokens`，改写为 `N_{web\_search}`、`N_{tokens}`
-- 不要把"给普通文本用的转义"直接搬进数学模式（如 `\_`、`\=`、`\*`）
-
-### 常见错误与正确写法
-
-- 错误：`$$ ... $s_0,a_0^j,o_1^j$ ... $$`（数学模式内嵌 `$`）
-  正确：`$$ ... s_0, a_0^j, o_1^j ... $$`
-- 错误：`$-\lambda \cdot #web_search$`
-  正确：`$-\lambda \cdot N_{web\_search}$`
-- 错误：`$\hat e = e^\*$`
-  正确：`$\hat e = e^*$`
-
-### 写后验证（必须）
-
-- 写入后立刻 `open-doc {docID} readable` 回读，确保模型看到的是"最终落地文本"
-- 至少搜索以下高风险串：`KaTeX parse error`、`Undefined control sequence`、`e^\\*`、`#web_search`、`#tokens`
-- 若命中，优先修正文档内容本身，不要在工具层做自动改写
+详细规则与常见错误对照表见 [docs/command-reference.md](docs/command-reference.md) 中的"公式写入规范"章节。
 
 ## Supporting Files
 
-- [docs/command-reference.md](docs/command-reference.md) — 每个命令的详细参数、默认值、返回格式、示例
+- [docs/command-reference.md](docs/command-reference.md) — 每个命令的详细参数、默认值、返回格式、示例、块类型对照表
+- [docs/database-operations.md](docs/database-operations.md) — 数据库高层操作、relation / rollup、filters / sorts / views、gallery / kanban
 - [docs/pmf-spec.md](docs/pmf-spec.md) — PMF 格式规范、安全操作 vs 危险操作、编辑策略详解
 - [docs/sql-reference.md](docs/sql-reference.md) — SQL 表结构、字段说明、查询示例
 
@@ -451,40 +360,19 @@ SIYUAN_ENABLE_WRITE=true node /tmp/batch_edit.js
 - SQLite 语法；默认最多返回 64 行
 - 时间格式 `YYYYMMDDHHmmss`
 - 主要表：`blocks`（块）、`refs`（引用）、`attributes`（属性）
-- 块类型：`d`文档 `h`标题 `p`段落 `l`列表 `c`代码 `t`表格 `m`公式 `b`引述 `s`超级块
-- **⚠️ `tb` 是分割线（thematic break / `---`），不是"表格体"！** 表格的块类型是 `t`
-- 层级：`root_id` → 文档，`parent_id` → 父容器
+- 块类型见下方 Block Type Reference；层级：`root_id` → 文档，`parent_id` → 父容器
 - JS API 查询：`s.executeSiyuanQuery('SQL')` 执行查询，`s.formatResults(r)` 格式化输出
 
-## Block Type Reference（思源内核源码 `treenode/node.go`）
+## Block Type Reference
 
-| 类型代码 | 节点类型 | 说明 | 是否容器块 |
-|---------|---------|------|-----------|
-| `d` | NodeDocument | 文档 | 是 |
-| `h` | NodeHeading | 标题 | 否 |
-| `p` | NodeParagraph | 段落 | 否 |
-| `l` | NodeList | 列表 | 是 |
-| `i` | NodeListItem | 列表项 | 是 |
-| `c` | NodeCodeBlock | 代码块 | 否 |
-| `m` | NodeMathBlock | 公式块 | 否 |
-| `t` | NodeTable | **表格**（整体为一个块，内部 head/body/row/cell 不是独立块） | 否 |
-| `b` | NodeBlockquote | 引述 | 是 |
-| `query_embed` | NodeBlockQueryEmbed | 嵌入块 | 否 |
-| `av` | NodeAttributeView | 属性视图（数据库） | 否 |
-| `iframe` | NodeIFrame | IFrame | 否 |
-| `widget` | NodeWidget | 挂件 | 否 |
-| `video` | NodeVideo | 视频 | 否 |
-| `audio` | NodeAudio | 音频 | 否 |
-| `callout` | NodeCallout | 提示框（如 `> [!TIP]`） | 是 |
-| `s` | NodeSuperBlock | 超级块 | 是 |
-| `tb` | NodeThematicBreak | **分割线**（`---`），⚠️ 不是表格体 | 否 |
-| `html` | NodeHTMLBlock | HTML 块 | 否 |
+常用类型速查：`d`文档 `h`标题 `p`段落 `l`列表 `i`列表项 `c`代码 `m`公式 `t`表格 `b`引述 `s`超级块 `av`数据库 `tb`分割线（⚠️ 不是表格体）
 
-**表格结构说明**：思源中表格（`t`）是原子块，内部的 TableHead/TableBody/TableRow/TableCell 是 AST 节点，**没有独立 block ID**。编辑表格只能整体替换，不能操作单个单元格。
+**表格（`t`）是原子块**，内部 head/body/row/cell 没有独立 block ID，编辑只能整体替换。
+
+完整类型对照表见 [docs/command-reference.md](docs/command-reference.md)。
 
 ## Notes
 
-- 数据库相关操作优先阅读 `docs/database-operations.md`
 - cwd 必须是 skill 目录（`index.js` 所在目录）
 - `.env` 自动从 `index.js` 目录加载
 - 配置键：`SIYUAN_HOST`、`SIYUAN_PORT`、`SIYUAN_USE_HTTPS`、`SIYUAN_API_TOKEN`

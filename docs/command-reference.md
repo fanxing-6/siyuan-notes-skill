@@ -918,3 +918,31 @@ SIYUAN_ENABLE_WRITE=true node index.js asset-embed-pdf --parent "{docID}" /tmp/s
 
 - `asset-upload` 只修改 assets，不要求先读取文档
 - `asset-insert` 会改文档内容，因此必须先 `open-doc`
+
+---
+
+## Block Type Reference（思源内核源码 `treenode/node.go`）
+
+| 类型代码 | 节点类型 | 说明 | 是否容器块 |
+|---------|---------|------|-----------|
+| `d` | NodeDocument | 文档 | 是 |
+| `h` | NodeHeading | 标题 | 否 |
+| `p` | NodeParagraph | 段落 | 否 |
+| `l` | NodeList | 列表 | 是 |
+| `i` | NodeListItem | 列表项 | 是 |
+| `c` | NodeCodeBlock | 代码块 | 否 |
+| `m` | NodeMathBlock | 公式块 | 否 |
+| `t` | NodeTable | **表格**（整体为一个块，内部 head/body/row/cell 不是独立块） | 否 |
+| `b` | NodeBlockquote | 引述 | 是 |
+| `query_embed` | NodeBlockQueryEmbed | 嵌入块 | 否 |
+| `av` | NodeAttributeView | 属性视图（数据库） | 否 |
+| `iframe` | NodeIFrame | IFrame | 否 |
+| `widget` | NodeWidget | 挂件 | 否 |
+| `video` | NodeVideo | 视频 | 否 |
+| `audio` | NodeAudio | 音频 | 否 |
+| `callout` | NodeCallout | 提示框（如 `> [!TIP]`） | 是 |
+| `s` | NodeSuperBlock | 超级块 | 是 |
+| `tb` | NodeThematicBreak | **分割线**（`---`），⚠️ 不是表格体 | 否 |
+| `html` | NodeHTMLBlock | HTML 块 | 否 |
+
+**表格结构说明**：思源中表格（`t`）是原子块，内部的 TableHead/TableBody/TableRow/TableCell 是 AST 节点，**没有独立 block ID**。编辑表格只能整体替换，不能操作单个单元格。
